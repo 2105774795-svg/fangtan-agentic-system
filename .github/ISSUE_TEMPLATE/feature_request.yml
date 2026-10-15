@@ -1,0 +1,33 @@
+name: 功能建议
+description: 说明场景、期望行为与资料安全影响。
+title: "[建议] "
+body:
+  - type: markdown
+    attributes:
+      value: 请用虚构示例说明需求，不附真实访谈、时叙录材料、员工信息或凭据。漏洞请按 SECURITY.md 私密报告。
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 要解决什么问题
+      description: 说明汇言笔或时叙录中的使用场景，以及当前做法的不足。
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 希望怎样改
+      description: 描述入口、操作、预期输出，以及是否保留原 UI；可以附合成示意图。
+    validations:
+      required: true
+  - type: textarea
+    id: privacy
+    attributes:
+      label: 数据、权限与同意机制
+      description: 是否新增采集、云端处理、共享、导出或保留时间？如何单独同意、撤回和删除？是否影响两类资料隔离？不涉及请注明。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 如何验收
+      description: 给出可检查的结果、替代方案和已知限制；鸿蒙相关请说明可用 SDK 和真机环境。

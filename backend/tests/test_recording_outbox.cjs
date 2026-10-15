@@ -1,0 +1,29 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const {indexedDB}=require('fake-indexeddb');
+const ts=require('typescript');
+const root=path.resolve(__dirname,'../..');
+const window={};const context=vm.createContext({window,indexedDB,Date,Promise});
+vm.runInContext(fs.readFileSync(path.join(root,'backend/static/assets/recording-support.js'),'utf8'),context);
+(async()=>{
+  const first={id:'z-first',sid:'session-one',blob:new Blob(['first'],{type:'audio/wav'}),createdAt:100,order:1};
+  const second={id:'a-second',sid:'session-one',blob:new Blob(['second'],{type:'audio/wav'}),createdAt:100,order:2};
+  await window.RecordingStore.put({...first,persisted:Promise.resolve()});
+  await window.RecordingStore.put(second);
+  await window.RecordingStore.put({id:'another-session',sid:'session-two',blob:new Blob(['other']),order:0});
+  let rows=await window.RecordingStore.list('session-one');
+  assert.deepEqual(rows.map(row=>row.id),['z-first','a-second'],'相同时间的分片应按采集顺序而非 UUID 排序');
+  assert.equal(await rows[0].blob.text(),'first');
+  await window.RecordingStore.remove(first.id);rows=await window.RecordingStore.list('session-one');assert.equal(rows.length,1);
+  assert.equal((await window.RecordingStore.list('session-two')).length,1,'确认上传只清理对应分片，不影响其他访谈');
+
+  const waveSource=fs.readFileSync(path.join(root,'harmonyos/entry/src/main/ets/recording/Wave.ets'),'utf8');
+  const emitted=ts.transpileModule(waveSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
+  const wave=vm.createContext({exports:{}});vm.runInContext(emitted,wave);
+  const header=Buffer.from(new Uint8Array(wave.exports.waveHeader(320000)));
+  assert.equal(header.toString('ascii',0,4),'RIFF');assert.equal(header.readUInt32LE(4),320036);
+  assert.equal(header.toString('ascii',8,12),'WAVE');assert.equal(header.readUInt32LE(24),16000);
+  assert.equal(header.readUInt16LE(22),1);assert.equal(header.readUInt16LE(34),16);assert.equal(header.readUInt32LE(40),320000);
+  const joined=Buffer.from(new Uint8Array(wave.exports.joinBytes([new Uint8Array([1,2]),new Uint8Array([3,4])])));
+  assert.deepEqual([...joined],[1,2,3,4]);
+  console.log('PASS: IndexedDB 音频持久化、采集顺序、单片确认清理及原生 WAV 编码；此测试不等同于鸿蒙 SDK 编译');
+})().catch(error=>{console.error(error);process.exitCode=1});

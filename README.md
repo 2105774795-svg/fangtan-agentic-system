@@ -1,0 +1,132 @@
+# 汇言笔与时叙录 · 访谈体察 Agentic 系统
+
+基于 FastAPI、SQLite 和独立后台任务进程的访谈与口述史工具。首页提供上下两个入口：**汇言笔**用于调研访谈和录音管理，**时叙录**用于单独隔离的私密人物讲述。页面采用原生 HTML/CSS/JavaScript，无前端打包步骤。
+
+本仓库提供应用源码、测试和通用部署模板，不包含真实录音、人物资料、密钥、员工中心服务及维护者的生产运维脚本。
+
+## 功能概览
+
+### 汇言笔
+
+- **访前准备**：选择访谈对象、行业、城市和市场/园区，填写主题与采访重点，生成可编辑、可勾选的提纲；地点背景通过联网检索返回来源、检索时间和摘录，检索失败明确提示。
+- **现场录音**：实时转写、追问建议与摸排提醒；把筛选的提纲直接带入录音。AI 根据完整逐字稿分析每题回答是否充分，并附可定位的原话证据，手工“已问”与 AI“问透”分开记录。
+- **材料导入**：支持 MP3、M4A、WAV、AAC、OGG、FLAC、WMA、WEBM、MP4，以及 TXT、MD、DOCX、SRT、VTT、CSV、JSON、HTML 文字稿。默认音频上限 200MB，文字稿 20MB。
+- **整理与管理**：摘要、结论、行动项、主题章节、原话、事实数据、风险及待核实事项；支持全文搜索、待办、人工发言人标记、音频定位回听、基于原文的问答、Word 导出。
+- **项目归档**：按项目组织访谈；选取 2–50 场访谈，综合每场完整逐字稿与已有纪要生成总记录，而非只拼接纪要。项目可下载包含留存录音、逐字稿、已有纪要和清单的 ZIP；缺项会明确列出。
+- **协作权限**：认证模式下创建人可共享给在职同事，分享对象仅查看；可生成 7 天有效、可撤销的单项免登录分享链接。持有链接即可阅读，应谨慎转发。
+
+提纲、纪要、导入等长任务使用持久队列，网页断开不会主动取消服务器任务；队列支持租约、重试和合作式取消。云端重试可能产生额外费用，不保证第三方请求恰好执行一次。
+
+### 时叙录
+
+- 独立身份验证、人物档案和多次语音/文字讲述，采用半双工一问一答。
+- 从已保存的原稿中提取跨次线索，候选或不确定记忆需人工确认。
+- 综合同一人物全部本人原始讲述，生成带原话依据的章节草稿；审核确认后导出 Word/Markdown，原稿新增后旧稿标记过期。
+- 桌面宽屏工作区、左侧导航，手机单列适配。当前不含家人邀请、照片协作或全双工通话。
+
+时叙录始终需要独立员工身份验证，即使汇言笔设置为本地免登录，也不会匿名开放。两者采用独立业务表、接口权限和文件命名空间，仍共用一个 SQLite 数据库，**不等于独立加密数据库**。
+
+## 快速开始（Windows / PowerShell）
+
+需要 Python 3.10 或以上版本。以下命令只准备环境，服务由你显式启动。
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -i https://mirrors.aliyun.com/pypi/simple/ -r backend\requirements.txt
+Copy-Item backend\.env.example backend\.env
+```
+
+编辑 `backend/.env`：
+
+| 配置 | 用途 |
+|---|---|
+| `KIMI_API_KEY` / `KIMI_MODEL` | Moonshot 模型密钥和模型名，用于提纲、分析和章节整理；选择账号实际可用的模型 |
+| `DASHSCOPE_API_KEY` | 阿里云百炼音频转写密钥；纯文字场景不需要转写 |
+| `FANGTAN_AUTH_ENABLED` | 默认 `true`；只在本机单人体验汇言笔时显式设为 `false` |
+| `AUTH_API_URL` | 你自行部署或适配的员工中心地址；员工中心实现不在本仓库内 |
+| `FANGTAN_DATA_DIR` | 数据目录，相对路径以 `backend/` 为基准，默认 `../data` |
+| `FANGTAN_PUBLIC_BASE` | 默认本机地址；公网异步音频转写需改为你自己的 HTTPS 地址 |
+
+员工中心需适配 [`backend/employee_auth.py`](backend/employee_auth.py) 使用的登录、会话检查和员工查询契约。不能只填任意登录页地址；员工中心不可用时认证会失败，不会自动降级为免登录。时叙录也依赖此适配，不能仅靠本机免登录配置体验其完整流程。
+
+在项目根目录的两个终端分别启动：
+
+```powershell
+# 终端一：网页与 API，仅监听本机，必须保持单 API worker
+.\.venv\Scripts\python.exe -m uvicorn app:app --app-dir backend --host 127.0.0.1 --port 18995 --workers 1
+```
+
+```powershell
+# 终端二：独立后台任务处理进程
+.\.venv\Scripts\python.exe backend\worker.py
+```
+
+打开 [本机网页](http://127.0.0.1:18995/)，在各终端按 `Ctrl+C` 停止对应进程。API 与 Worker 应使用同一环境、配置和数据目录；不启动 Worker 时长任务会等待在队列中。不要在同一数据目录并行运行测试和日常服务。
+
+本机免登录模式下，所有可访问该服务的人都能查看、编辑汇言笔当前数据目录中的记录，共享/分享链接暂停，因此只应监听 `127.0.0.1`。恢复认证不会自动把本地新增记录归属给员工。请勿把免登录实例直接公开到互联网。
+
+项目通过 `imageio-ffmpeg` 提供 FFmpeg，也可使用系统已有的 FFmpeg。本机转写使用 Base64 同步音频请求；配置公网 HTTPS 地址后，异步转写服务需能访问受控的一次性音频回调地址。反向代理、鉴权和上传大小应一起配置，不能为转写而公开录音目录。
+
+## 架构与部署
+
+```text
+浏览器 / 可选鸿蒙源码端
+          │
+          ▼
+   FastAPI（单进程） ── 权限校验 / 录音 / SSE
+          │
+          ▼
+   SQLite 业务表与持久任务队列
+          ▲                     数据目录
+          │                    数据库 / 原音 / 报告
+   独立 Python Worker ── 转写 / 模型分析 / 归档
+```
+
+当前实时录音锁和 SSE 协调依赖 API 进程，不能直接增加 Uvicorn worker 数量或多实例部署。SQLite 也不是跨主机任务队列；扩容前需改造状态协调、存储和任务基础设施。
+
+Linux 双进程部署、反向代理、备份及升级检查见 [`examples/deployment/README.md`](examples/deployment/README.md)。仓库提供专用非 root 用户的 systemd 示例，**模板存在不会自动安装或启动服务**，须管理员按自己的目录和权限调整。这里只提供通用部署方式，不包含维护者的生产发布脚本或发布审计记录。
+
+## 隐私、成本与能力边界
+
+- 模型分析、转写、联网检索均可能使用付费云服务。使用你自己的账号与密钥，并核对供应商的数据处理、保存期限和费用政策；本地部署不等于全离线。
+- 录音和云端处理前取得参与者知情同意。发言人自动分离另需单独同意，只生成本次录音的 A/B 标记，不建立跨访谈声纹库；可删除分离结果及同意记录。
+- 用量统计默认关闭。只有管理员主动设置非空 `TEAMFLOW_USAGE_URL` 且启用员工认证后，才会向该地址发送员工姓名、事件 ID 和用量等数据；本地免登录模式不上报。不要在不告知用户的情况下启用。
+- 导入的临时处理文件分析后清理，留存的原音供回听和下载，删除访谈时一并清理。时叙录原音在 `data/memoir-private/recordings/`；其正文不写入浏览器 localStorage/IndexedDB。删除无法追回已下载副本、历史备份或第三方已处理内容。
+- 项目是数据库中的逻辑分类，ZIP 下载解压后才形成电脑上的项目目录。ZIP 没有加密；它不能替代整个数据目录和数据库的一致备份。
+- AI 判断、纪要与原话引用是辅助整理，不是事实核验。联网来源也可能过时或不准确；重要结论应人工核实，时叙录草稿需人工确认后导出。
+- 浏览器的熄屏、切后台录音不保证连续。汇言笔会保存分片并重试上传；时叙录切后台停止采音并保留当前页未提交片段，离开页面仍可能丢失未提交内容。
+- [`harmonyos/`](harmonyos/README.md) 提供鸿蒙原生录音工程源码，**尚未完成 HAP 编译、签名、真机后台录音验收或应用市场上架**，不是可直接安装的成品 App。部署者必须替换工程中的服务地址、包名及签名配置。
+
+## 代码与文档导航
+
+### 前端离线回归
+
+应用网页不需要 Node.js；只有运行前端测试时需要 Node.js 22 或以上版本。仓库将 Playwright 固定为已验证的版本，并优先使用国内 npm 镜像：
+
+```powershell
+npm ci
+npx playwright install chromium
+npm run test:frontend
+```
+
+也可在已有 Microsoft Edge 的 Windows 上设置 `$env:PLAYWRIGHT_BROWSER_CHANNEL='msedge'`，再执行测试而不另装 Chromium。测试使用合成资料并拦截网络，不启动 API 或 Worker；后端隔离测试步骤见 [贡献指南](CONTRIBUTING.md)。截图和测试产物生成在被 Git 排除的 `data/qa/` 中。
+
+| 路径 | 职责 |
+|---|---|
+| `backend/app.py` | FastAPI 路由、录音协调与 SSE |
+| `backend/job_queue.py`、`backend/worker.py` | SQLite 持久队列、租约、独立任务进程 |
+| `backend/task_handlers.py`、`backend/services/` | 生成、导入及原文处理 |
+| `backend/coverage_ai.py`、`backend/place_research.py`、`backend/project_bundle.py` | 问透分析、地点检索和项目打包 |
+| `backend/memoir/` | 时叙录独立认证、业务与任务处理 |
+| `backend/static/` | 页面及模块化 JavaScript |
+| `backend/tests/` | Python 后端与 Node/Playwright 前端测试 |
+| `examples/deployment/` | 通用部署说明及双进程 systemd 模板 |
+| `data/` | 运行时生成的数据、录音和报告，不属于公开源码 |
+
+详细文档：[规范中心](specs/README.md) · [产品需求](specs/PRD.md) · [操作说明](specs/USER_GUIDE.md) · [技术规范](specs/SPEC.md) · [架构](specs/ARCHITECTURE.md) · [API](specs/API.md)。部分规范保留功能演进记录，不表示当前仓库包含某一维护者的服务器环境。
+
+欢迎通过 Issue 和 Pull Request 协作。提交前阅读 [贡献指南](CONTRIBUTING.md)，漏洞和敏感信息按 [安全政策](SECURITY.md) 处理，勿在公开 Issue 中上传真实录音、个人资料或密钥。
+
+## 许可证
+
+本项目代码使用 [MIT 许可证](LICENSE)。模型服务、第三方依赖及用户上传资料仍受其各自许可、条款和权利约束；MIT 许可不授予他人的音频、肖像或个人资料使用权。

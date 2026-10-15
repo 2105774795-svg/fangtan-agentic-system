@@ -1,0 +1,24 @@
+# 通用模板：管理员须先调整用户、路径、配置和数据权限，再显式安装/启动。
+# 与 API 使用同一账户、环境文件和数据目录；不监听网络端口。
+[Unit]
+Description=Fangtan durable background task worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fangtan
+Group=fangtan
+WorkingDirectory=/opt/fangtan-agent/backend
+EnvironmentFile=/opt/fangtan-agent/backend/.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/fangtan-agent/.venv/bin/python worker.py
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+{
+  "name": "fangtan-agentic-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "汇言笔与时叙录的离线前端回归测试工具",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/2105774795-svg/fangtan-agentic-system.git"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test:frontend": "node scripts/run-frontend-tests.cjs"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "6.2.5",
+    "playwright": "1.62.1",
+    "typescript": "6.0.3"
+  }
+}

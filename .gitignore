@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Secrets and local configuration
+backend/.env
+*.env
+.env
+.env.*
+!.env.example
+!**/.env.example
+.codex/
+.agents/
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.p7b
+*.jks
+*.keystore
+
+# Runtime data includes private memoir audio, exports, QA and local release backups.
+# Never publish user material; tests generate synthetic fixtures in temporary folders.
+/data/
+**/uploads/
+**/recordings/
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.wav
+*.mp3
+*.m4a
+*.webm
+*.flac
+*.ogg
+*.aac
+*.wma
+*.mp4
+
+# Private production operations stay on the maintainer's machine.
+# Public installation templates are maintained under examples/deployment/.
+/deploy/
+/启动说明.md
+/项目交接说明.md
+/design-qa.md
+
+# HarmonyOS local SDK, signing material and generated outputs
+harmonyos/local.properties
+harmonyos/.hvigor/
+harmonyos/oh_modules/
+harmonyos/**/build/
+harmonyos/*.p12
+harmonyos/*.cer
+harmonyos/*.p7b
+**/local.properties
+**/.hvigor/
+**/oh_modules/
+**/node_modules/
+**/build/
+
+# Local logs / OS files
+*.log
+*.bundle
+*.zip
+*.tar
+*.tar.gz
+.DS_Store
+Thumbs.db
