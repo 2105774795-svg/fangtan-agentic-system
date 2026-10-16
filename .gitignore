@@ -72,3 +72,6 @@ harmonyos/*.p7b
 *.tar.gz
 .DS_Store
 Thumbs.db
+
+# Generated research workspace frontend
+/backend/static/platform/

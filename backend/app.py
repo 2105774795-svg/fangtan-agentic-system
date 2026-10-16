@@ -47,6 +47,7 @@ from services.inline_context import SessionContext
 from services.downloads import TemporaryDownloadResponse
 from services.materials import load_project_materials, location_text
 from memoir import api as memoir_api, auth as memoir_auth, store as memoir_store
+import research_platform
 
 app = FastAPI(title="访谈-体察", redirect_slashes=False)
 app.mount(
@@ -69,6 +70,10 @@ memoir_store.init()
 memoir_auth.init()
 app.include_router(task_api.router)
 app.include_router(memoir_api.router)
+research_platform.init()
+app.include_router(research_platform.router)
+app.mount("/platform-assets", StaticFiles(directory=Path(__file__).parent / "static" / "platform" / "platform-assets", check_dir=False), name="platform-assets")
+app.mount("/platform-media", StaticFiles(directory=Path(__file__).parent / "static" / "platform-media", check_dir=False), name="platform-media")
 config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 config.REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -411,8 +416,16 @@ def _run_auto_naming(sid: str, attempt_id: int):
 # ---------- 静态前端 ----------
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    platform_index = Path(__file__).parent / "static" / "platform" / "index.html"
+    if platform_index.exists():
+        return HTMLResponse(platform_index.read_text(encoding="utf-8"))
     html = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     return HTMLResponse(html)
+
+
+@app.get("/legacy", response_class=HTMLResponse)
+async def legacy_index():
+    return HTMLResponse((Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8"))
 
 
 # ---------- API ----------
