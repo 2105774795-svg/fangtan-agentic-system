@@ -14,3 +14,28 @@
 .home-header nav,.section-heading h2{font-size:13px}.home-composer label{font-size:13px}.scenario-suggestions>button{font-size:12px}.project-row-text strong{font-size:13px}.project-row-text small{font-size:11px}.sidebar nav>button,.new-project{font-size:13px}.breadcrumb{font-size:12px}.chat-message{font-size:13px;line-height:1.95}.message-author,.chat-date{font-size:11px}.demo-notice{font-size:10px}.brief-form legend{font-size:12px}.choice-options>button{font-size:12px;min-height:35px}.context-label,.context-label>input{font-size:12px}.brief-actions>button{font-size:11px}.brief-footnote{font-size:10px}.chat-composer textarea{font-size:12px}.next-step-card>div{font-size:12px}.next-step-card>p{font-size:12px}.next-step-card>button{font-size:11px}.work-heading p{font-size:12px}.markdown-document{font-size:13px}.markdown-document blockquote{font-size:12px}.artifact-disclaimer{font-size:11px}.phase-badge{font-size:10px}.current-step-bar strong{font-size:12px}.current-step-bar small{font-size:11px}.flow-step.pending .step-name{color:#76766b}.canvas-footnote{font-size:10px}.file-row strong{font-size:13px}
 @media(max-width:680px){.home-header nav{font-size:11px}.home-composer label{font-size:12px}.scenario-suggestions>button{font-size:11px}.chat-message{font-size:13px}.brief-actions>button{font-size:11px}.work-heading p{font-size:11px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important;scroll-behavior:auto!important}.reveal-mask{visibility:hidden!important}}
+
+/* Self-hosted Noto Serif SC, subset to the wordmark and subtitle; SIL OFL in assets. */
+@font-face{font-family:"Fieldwork Serif";src:url('./assets/fieldwork-serif.ttf') format('truetype');font-weight:500;font-style:normal;font-display:swap}
+.hero-heading .hero-wordmark{display:flex;flex-direction:column;align-items:center;gap:12px;letter-spacing:normal}
+.hero-heading .hero-wordmark .wordmark-cn{font-family:"Fieldwork Serif","Songti SC",SimSun,serif;font-size:clamp(56px,4.7vw,76px);font-weight:500;line-height:1.15;letter-spacing:.16em;text-indent:.16em}
+.hero-heading .hero-wordmark .wordmark-en{font-family:"Manrope Variable",sans-serif;font-size:12px;font-weight:500;line-height:1.5;letter-spacing:.38em;text-indent:.38em;text-transform:uppercase;color:var(--muted)}
+.hero-heading .hero-subtitle{position:relative;display:inline-grid;grid-template-columns:1fr;font-family:"Fieldwork Serif","Songti SC",SimSun,serif;font-size:clamp(14px,1.2vw,18px);font-weight:500;letter-spacing:.09em;line-height:1.8;margin-top:25px;max-width:100%;white-space:nowrap}
+.typewriter-measure,.typewriter-line{grid-column:1;grid-row:1}
+.typewriter-measure{visibility:hidden}
+.typewriter-line{text-align:left}
+.typewriter-caret{display:inline-block;width:1px;height:1em;background:currentColor;vertical-align:-.12em;margin-left:3px;animation:hero-caret .75s step-end infinite}
+.is-done .typewriter-caret{opacity:0;animation:none}
+@keyframes hero-caret{50%{opacity:0}}
+.project-row-open{display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-align:left;padding:0;align-self:stretch}
+.project-row-open:hover .project-row-text strong{color:var(--accent)}
+.project-row-delete{width:34px;height:36px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;border-radius:8px;color:var(--muted)}
+.project-row-delete:hover:not(:disabled){color:#aa4035;background:color-mix(in srgb,#aa4035 9%,var(--surface))}
+.project-delete-confirm{line-height:1.9;font-size:13px}
+.delete-project-name{display:flex;align-items:flex-start;gap:12px;padding:16px;background:var(--panel);border:1px solid var(--line);border-radius:10px;margin-bottom:20px;overflow-wrap:anywhere}
+.project-delete-confirm>p{margin-top:12px}
+.delete-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:28px}
+.danger-button{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:10px 18px;border-radius:9px;background:#aa4035;color:#fff;font-size:12px;font-weight:600}
+.danger-button:hover:not(:disabled){background:#8c3028;color:#fff}
+@media(max-width:680px){.hero-heading .hero-wordmark{gap:10px}.hero-heading .hero-wordmark .wordmark-cn{font-size:56px}.hero-heading .hero-wordmark .wordmark-en{font-size:10px}.hero-heading .hero-subtitle{font-size:13px;margin-top:22px;letter-spacing:.06em}.project-row{gap:6px}.history-list .project-row-open{gap:10px}.history-list .project-row time{display:none}.project-row-delete{min-width:36px;min-height:40px}}
+@media(prefers-reduced-motion:reduce){.typewriter-caret{animation:none;display:none}}

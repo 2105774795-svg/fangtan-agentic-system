@@ -81,6 +81,11 @@ def _transcribe_inline(wav_path: str) -> str:
     }
     with httpx.Client(timeout=180) as cli:
         response = cli.post(DASHSCOPE_FLASH_URL, json=payload, headers=headers)
+        body = response.json()
+        if "ASR_RESPONSE_HAVE_NO_WORDS" in {body.get("code"), body.get("message"),
+                                               (body.get("output") or {}).get("code"),
+                                               (body.get("output") or {}).get("message")}:
+            return ""
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:

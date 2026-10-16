@@ -1,0 +1,67 @@
+// Isolated browser fixture only: typography, typing, deletion, current-project exit.
+const { chromium } = require('playwright');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const base = 'http://127.0.0.1:18998';
+const output = 'data/qa/platform-home';
+fs.mkdirSync(output, { recursive: true });
+(async () => {
+ const browser = await chromium.launch({ channel: 'msedge', headless: true });
+ try {
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+  const errors = []; page.on('pageerror', e => errors.push(e.message));
+  await page.goto(base);
+  await page.waitForFunction(() => { const n = document.querySelector('.typewriter-text')?.textContent?.length; return n > 0 && n < 15; });
+  await page.evaluate(() => document.fonts.ready);
+  const before = await page.locator('.home-composer').boundingBox();
+  await page.locator('.hero-subtitle.is-done').waitFor();
+  const after = await page.locator('.home-composer').boundingBox();
+  assert.equal(before.y, after.y, 'typing must not move the composer');
+  assert.equal(await page.locator('.typewriter-text').textContent(), '让每一次对话，都有迹可循。');
+  assert.ok(await page.locator('.wordmark-cn').evaluate(el => getComputedStyle(el).fontFamily.includes('Fieldwork Serif')));
+  await page.screenshot({ path: `${output}/home-desktop.png`, fullPage: true, animations: 'disabled' });
+  assert.equal(await page.locator('.typewriter-text').textContent(), '让每一次对话，都有迹可循。');
+  const create = async name => {
+   const r = await page.request.post(base + '/api/platform/projects', { data: { prompt: name + ' ' + Date.now(), mode: 'demo', request_id: 'home-delete-' + crypto.randomUUID() } });
+   assert.equal(r.status(), 201, await r.text()); return r.json();
+  };
+  const target = await create('浏览器删除测试 · 可删除');
+  const keep = await create('浏览器删除测试 · 保留');
+  await page.reload();
+  await page.getByRole('button', { name: /我的项目/ }).click();
+  await page.getByRole('button', { name: `删除项目：${target.title}`, exact: true }).click();
+  await page.getByRole('dialog', { name: '删除项目', exact: true }).waitFor();
+  assert.ok(await page.getByRole('button', { name: '取消', exact: true }).evaluate(el => el === document.activeElement));
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal((await page.request.get(`${base}/api/platform/projects/${target.id}`)).status(), 200);
+  await page.getByRole('button', { name: `删除项目：${target.title}`, exact: true }).click();
+  await page.screenshot({ path: `${output}/delete-confirm.png`, animations: 'disabled' });
+  await page.getByRole('button', { name: '删除项目', exact: true }).click();
+  await page.locator(`[data-project-id="${target.id}"]`).waitFor({ state: 'hidden' });
+  assert.equal((await page.request.get(`${base}/api/platform/projects/${target.id}`)).status(), 404);
+  assert.equal((await page.request.get(`${base}/api/platform/projects/${keep.id}`)).status(), 200);
+  await page.reload();
+  await page.getByRole('button', { name: /我的项目/ }).click();
+  assert.equal(await page.locator(`[data-project-id="${target.id}"]`).count(), 0);
+  await page.locator(`.history-list [data-project-id="${keep.id}"] .project-row-open`).click();
+  await page.getByTestId('research-map').waitFor();
+  await page.getByRole('button', { name: '历史项目', exact: true }).click();
+  await page.getByRole('button', { name: `删除项目：${keep.title}`, exact: true }).click();
+  await page.getByRole('button', { name: '删除项目', exact: true }).click();
+  await page.locator('.home-composer').waitFor();
+  assert.equal(new URL(page.url()).search, '');
+  await page.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('button', { name: '切换深色模式' }).click();
+  await page.screenshot({ path: `${output}/home-dark.png`, fullPage: true, animations: 'disabled' });
+  await page.getByRole('button', { name: '切换浅色模式' }).click();
+  const mobile = await browser.newPage({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+  await mobile.goto(base);
+  await mobile.locator('.hero-subtitle.is-done').waitFor();
+  await mobile.evaluate(() => document.fonts.ready);
+  assert.equal(await mobile.locator('.typewriter-text').textContent(), '让每一次对话，都有迹可循。');
+  assert.ok(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await mobile.screenshot({ path: `${output}/home-mobile.png`, fullPage: true, animations: 'disabled' });
+  assert.deepEqual(errors, []);
+  console.log('PASS: partial-to-complete typewriter without layout shift, local title font, cancel/delete/reload, delete active project, dark/mobile/reduced motion.');
+ } finally { await browser.close(); }
+})().catch(e => { console.error(e); process.exitCode = 1; });

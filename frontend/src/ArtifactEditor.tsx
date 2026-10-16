@@ -1,0 +1,23 @@
+import { useEffect, useState } from 'react';
+import { ArrowLeft, Clock, DownloadSimple, PencilSimple, FileText, Sparkle, FloppyDisk } from '@phosphor-icons/react';
+import { download, type Artifact } from './types';
+import { MarkdownContent } from './MarkdownContent';
+
+export function ArtifactEditor({ artifact, busy, onBack, onSave, onDirty, onReference, referencePrefix, focusParagraph }: { artifact: Artifact; busy: boolean; onBack: () => void; onSave: (content: string) => Promise<boolean>; onDirty: (dirty: boolean) => void; onReference?: (reference: string) => void; referencePrefix?: string; focusParagraph?: number | null }) {
+  const [editing, setEditing] = useState(false);
+  const [content, setContent] = useState(artifact.content);
+  const [historyVisible, setHistoryVisible] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const dirty = content !== artifact.content;
+
+  useEffect(() => { if (focusParagraph != null) requestAnimationFrame(() => document.getElementById(`material-line-${focusParagraph}`)?.scrollIntoView({ block: 'center' })); }, [artifact.id, focusParagraph]);
+  useEffect(() => { onDirty(dirty); return () => onDirty(false); }, [dirty, onDirty]);
+  const back = () => { if (!dirty || confirm('还有未保存的修改，确定离开吗？')) onBack(); };
+  useEffect(() => { const handler = (e: BeforeUnloadEvent) => { if (dirty) e.preventDefault(); }; addEventListener('beforeunload', handler); return () => removeEventListener('beforeunload', handler); }, [dirty]);
+  return <section className="artifact-editor"><div className="artifact-toolbar"><button className="text-button" onClick={back}><ArrowLeft size={16}/>返回画布</button><div><button className="icon-button" aria-label="查看版本历史" onClick={() => setHistoryVisible(!historyVisible)}><Clock size={18}/></button><button className="icon-button" aria-label="下载成果" onClick={() => download(`${artifact.title}.md`, content)}><DownloadSimple size={18}/></button><button className="secondary small" onClick={() => setEditing(!editing)}><PencilSimple size={15}/>{editing ? '预览' : '编辑'}</button></div></div><div className="artifact-title"><span className="file-type"><FileText size={25}/></span><div><h2>{artifact.title}</h2><p>v{artifact.version} · {artifact.demo ? '历史示例' : artifact.origin === 'ai' ? 'AI 草稿 · 待人工审阅' : artifact.kind === 'material' ? '原始材料' : '人工整理'}{artifact.stale ? ' · 上游已修改，请复核' : ''}</p></div></div>{artifact.demo && <div className="artifact-disclaimer"><Sparkle size={15}/>示例草稿，用于体验流程。未执行真实检索或模型分析。</div>}{historyVisible && <div className="version-history"><strong>版本历史</strong>{artifact.versions.length ? artifact.versions.slice().reverse().map(v => <button key={v.version} onClick={() => { if (!dirty || confirm('确定用此历史版本替换当前编辑内容？')) { setContent(v.content); setEditing(true); setHistoryVisible(false); } }}>v{v.version}<span>载入到编辑器</span></button>) : <p>首次编辑后会保留历史版本。</p>}</div>}
+    {artifact.kind === 'recording' && artifact.source_session && <div className="artifact-recording"><audio controls src={`/api/sessions/${encodeURIComponent(artifact.source_session)}/recording`}/><a href={`/api/sessions/${encodeURIComponent(artifact.source_session)}/recording?download=true`}>下载原始录音</a></div>}
+    {editing ? <textarea className="artifact-textarea" aria-label="成果正文" value={content} maxLength={100000} onChange={e => { setContent(e.target.value); setSaved(false); }}/>
+      : artifact.kind === 'material' ? <article className="markdown-document raw-material">{content.split('\n').map((line, index) => line.trim() ? <p key={index} id={`material-line-${index}`} className={focusParagraph === index ? 'focused-evidence' : ''}><small>[{referencePrefix || '材料'}-P{index + 1}]</small>{line}</p> : null)}</article> : <article className="markdown-document"><MarkdownContent text={content} onReference={onReference}/></article>}
+    <div className="artifact-footer"><span>{dirty ? '有未保存的修改' : saved ? '已保存新版本' : '修改将保留版本记录'}</span><button className="primary" disabled={!dirty || busy || !content.trim()} onClick={async () => { if (await onSave(content)) { setSaved(true); setEditing(false); } }}><FloppyDisk size={16}/>{busy ? '保存中…' : '保存修改'}</button></div>
+  </section>;
+}
