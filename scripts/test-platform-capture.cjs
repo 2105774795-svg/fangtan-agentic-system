@@ -2,13 +2,23 @@
 const { chromium } = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const base = 'http://127.0.0.1:18998';
+const base = process.env.PLATFORM_TEST_URL || 'http://127.0.0.1:18998';
 
 (async () => {
   const browser = await chromium.launch({ channel: 'msedge', headless: true, args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] });
   try {
     const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, permissions: ['microphone'] });
     const page = await context.newPage();
+    // Explicitly await async predicates: this installed browser poller treats a
+    // returned Promise as truthy rather than waiting for its boolean result.
+    const waitUntil = async (predicate, arg, options = {}) => {
+      const deadline = Date.now() + (options.timeout || 30000);
+      while (Date.now() < deadline) {
+        if (await page.evaluate(predicate, arg)) return;
+        await page.waitForTimeout(200);
+      }
+      throw new Error('Timed out waiting for persisted fixture state');
+    };
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     const post = async (url, data) => { const r = await page.request.post(base + url, { data }); assert.ok(r.ok(), await r.text()); return r.json(); };
     let project = await post('/api/platform/projects', { prompt: '锦州商户访谈 · 录音隔离测试', scenario: 'market', mode: 'ai', request_id: 'capture-' + Date.now() });
@@ -33,6 +43,18 @@ const base = 'http://127.0.0.1:18998';
     await page.reload();
     await page.getByText('已向受访者说明并取得录音及云端转写同意', { exact: true }).waitFor();
     await page.getByRole('checkbox', { name: '已向受访者说明并取得录音及云端转写同意' }).check();
+    // A denied microphone must explain the permission and allow a later retry.
+    await page.evaluate(() => {
+      const getUserMedia = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      let denied = false;
+      navigator.mediaDevices.getUserMedia = (...args) => {
+        if (!denied) { denied = true; return Promise.reject(new DOMException('Permission denied', 'NotAllowedError')); }
+        return getUserMedia(...args);
+      };
+    });
+    await page.getByRole('button', { name: '开始录音', exact: true }).click();
+    await page.getByText(/麦克风权限未开启/).waitFor();
+    assert.equal(await page.getByRole('button', { name: '开始录音', exact: true }).isEnabled(), true);
     // A failed ASR acknowledgement must preserve audio without trapping navigation.
     const failedAudio = '**/api/sessions/*/audio';
     await page.route(failedAudio, route => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ detail: '录音已保存，转写失败；重试不会重复保存录音' }) }));
@@ -40,7 +62,7 @@ const base = 'http://127.0.0.1:18998';
     await page.waitForTimeout(800);
     await page.getByRole('button', { name: '暂停录音', exact: true }).click();
     await page.getByText(/1 个分片待上传或转写/).waitFor();
-    await page.getByRole('button', { name: '开始录音', exact: true }).isEnabled().then(enabled => assert.ok(enabled));
+    await page.getByRole('button', { name: '继续本场录音', exact: true }).isEnabled().then(enabled => assert.ok(enabled));
     assert.deepEqual(await page.locator('nav[aria-label="工作空间"] button span').allTextContents(), ['调研底图', '现场采集', '项目资料', '项目概览']);
     await page.getByRole('button', { name: '调研底图', exact: true }).click();
     await page.getByTestId('research-map').waitFor();
@@ -52,35 +74,90 @@ const base = 'http://127.0.0.1:18998';
     await page.getByRole('button', { name: '重试上传 / 转写', exact: true }).click();
     await page.getByText(/1 个分片待上传或转写/).waitFor({ state: 'hidden' });
     await page.getByRole('checkbox', { name: '已向受访者说明并取得录音及云端转写同意' }).check();
-    await page.getByRole('button', { name: '开始录音', exact: true }).click();
+    await page.getByRole('button', { name: '继续本场录音', exact: true }).click();
     await page.getByRole('button', { name: '暂停录音', exact: true }).waitFor();
     await page.waitForTimeout(11200); // Cross the independent 10-second segment boundary.
     await page.getByRole('button', { name: '暂停录音', exact: true }).click();
-    await page.waitForFunction(async id => { const s = await (await fetch(`/api/sessions/${id}`)).json(); return s.utterances?.length >= 2; }, sid, { timeout: 30000 });
-    const finish = page.getByRole('button', { name: '结束访谈并生成纪要', exact: true });
+    await waitUntil(async id => { const s = await (await fetch(`/api/sessions/${id}`)).json(); return s.utterances?.length >= 2; }, sid, { timeout: 30000 });
+    const finish = page.getByRole('button', { name: '结束本场访谈', exact: true });
     await finish.click();
+    await page.getByRole('button', { name: '确认结束本场', exact: true }).click();
     await page.getByRole('button', { name: '同步逐字稿与纪要到工作台', exact: true }).waitFor();
-    await page.waitForFunction(async id => { const s = await (await fetch(`/api/sessions/${id}`)).json(); return s.report_status === 'ready'; }, sid);
+    await waitUntil(async id => { const s = await (await fetch(`/api/sessions/${id}`)).json(); return s.report_status === 'ready'; }, sid);
     await page.getByRole('button', { name: '同步逐字稿与纪要到工作台', exact: true }).click();
-    await page.waitForFunction(async id => { const p = await (await fetch(`/api/platform/projects/${id}`)).json(); return p.artifacts.some(a => a.kind === 'session_report'); }, project.id);
+    await waitUntil(async id => { const p = await (await fetch(`/api/platform/projects/${id}`)).json(); return p.artifacts.some(a => a.kind === 'session_report'); }, project.id);
     project = await read();
     assert.equal(project.artifacts.filter(a => a.kind === 'material' && a.source_session === sid).length, 1);
     await page.screenshot({ path: 'data/qa/platform-ai/capture-recording.png', animations: 'disabled' });
+    // A second independently named interview; pause survives reload, finish is explicit.
+    await page.getByRole('button', { name: '新建访谈', exact: true }).click();
+    await page.getByLabel('访谈名称或受访对象', { exact: true }).fill('张店主 · 第二次补访');
+    await page.getByRole('button', { name: '确认提纲，进入现场录音', exact: true }).click();
+    await page.getByRole('checkbox', { name: '已向受访者说明并取得录音及云端转写同意' }).check();
+    await page.getByRole('button', { name: '开始录音', exact: true }).click();
+    await page.waitForTimeout(800);
+    await page.getByRole('button', { name: '暂停录音', exact: true }).click();
+    await page.locator('.recording-state-label').filter({ hasText: '已暂停 · 本场未结束' }).waitFor();
+    project = await read(); const second = project.active_session_id;
+    assert.notEqual(second, sid);
+    assert.equal(project.interviews.length, 2);
+    assert.equal(project.interviews.find(item => item.id === sid).status, 'done');
+    assert.equal(project.interviews.find(item => item.id === second).status, 'live');
+    await page.reload();
+    await page.locator('.recording-state-label').filter({ hasText: '已暂停 · 本场未结束' }).waitFor();
+    assert.equal((await read()).active_session_id, second);
+    await page.getByRole('checkbox', { name: '已向受访者说明并取得录音及云端转写同意' }).check();
+    await page.getByRole('button', { name: '继续本场录音', exact: true }).click();
+    await page.waitForTimeout(700);
+    await page.getByRole('button', { name: '暂停录音', exact: true }).click();
+    await waitUntil(async id => { const s = await (await fetch(`/api/sessions/${id}`)).json(); return s.utterances?.length >= 2; }, second);
+    await page.getByRole('button', { name: '结束本场访谈', exact: true }).click();
+    await page.getByRole('button', { name: '取消，保留本场', exact: true }).click();
+    assert.equal((await (await page.request.get(`${base}/api/sessions/${second}`)).json()).status, 'live');
+    await page.getByRole('button', { name: '结束本场访谈', exact: true }).click();
+    await page.getByRole('button', { name: '确认结束本场', exact: true }).click();
+    await page.getByRole('button', { name: '同步逐字稿与纪要到工作台', exact: true }).waitFor();
+    await waitUntil(async id => { const p = await (await fetch(`/api/platform/projects/${id}`)).json(); return p.artifacts.filter(a => a.kind === 'material').length === 2; }, project.id);
+    await page.getByRole('button', { name: /张店主 · 第二次补访/ }).click();
+    assert.equal((await read()).active_session_id, second);
+    await page.getByRole('heading', { name: '张店主 · 第二次补访', exact: true }).waitFor();
+    await page.locator('.recording-state-label').filter({ hasText: '本场已结束' }).waitFor();
+    await page.screenshot({ path: 'data/qa/platform-ai/capture-multiple.png', animations: 'disabled' });
     await page.getByRole('button', { name: '返回工作台继续分析', exact: true }).click();
     await page.getByTestId('research-map').waitFor();
     await page.getByRole('button', { name: /^现场采集/ }).click();
     await page.getByRole('button', { name: '导入已有材料', exact: true }).click();
     await page.getByLabel('提交已有录音或文字稿', { exact: true }).setInputFiles({ name: '合成访谈.txt', mimeType: 'text/plain', buffer: Buffer.from('受访者：店里准备试行夜间营业。\n采访者：这个建议还需要核实。') });
-    await page.waitForFunction(async id => { const p = await (await fetch(`/api/platform/projects/${id}`)).json(); return p.artifacts.filter(a => a.kind === 'material').length === 2; }, project.id, { timeout: 30000 });
+    await waitUntil(async id => { const p = await (await fetch(`/api/platform/projects/${id}`)).json(); return p.artifacts.filter(a => a.kind === 'material').length === 3; }, project.id, { timeout: 30000 });
     await page.getByRole('button', { name: '导入已有材料', exact: true }).click();
+    await waitUntil(() => !document.querySelector('input[aria-label="提交已有录音或文字稿"]')?.disabled);
     // A short synthetic WAV also exercises the original audio import/transcription path.
     const audio = Buffer.alloc(44 + 16000 * 2);
     audio.write('RIFF'); audio.writeUInt32LE(audio.length - 8, 4); audio.write('WAVEfmt ', 8); audio.writeUInt32LE(16, 16); audio.writeUInt16LE(1, 20); audio.writeUInt16LE(1, 22); audio.writeUInt32LE(16000, 24); audio.writeUInt32LE(32000, 28); audio.writeUInt16LE(2, 32); audio.writeUInt16LE(16, 34); audio.write('data', 36); audio.writeUInt32LE(audio.length - 44, 40);
     await page.getByLabel('提交已有录音或文字稿', { exact: true }).setInputFiles({ name: 'synthetic.wav', mimeType: 'audio/wav', buffer: audio });
-    await page.waitForFunction(async id => { const p = await (await fetch(`/api/platform/projects/${id}`)).json(); return p.artifacts.filter(a => a.kind === 'material').length === 3; }, project.id, { timeout: 30000 });
+    await waitUntil(async id => { const p = await (await fetch(`/api/platform/projects/${id}`)).json(); return p.artifacts.filter(a => a.kind === 'material').length === 4; }, project.id, { timeout: 30000 });
     await page.screenshot({ path: 'data/qa/platform-ai/capture-import.png', animations: 'disabled' });
+    project = await read();
+    project = await post(`/api/platform/projects/${project.id}/commands`, { action: 'advance', revision: project.revision }); await settled();
+    project = await post(`/api/platform/projects/${project.id}/commands`, { action: 'advance', revision: project.revision }); await settled();
+    let report = project.artifacts.find(a => a.step === 5 && !a.stale);
+    assert.equal(report.source_ids.length, 4, 'all independent originals participate in the integrated report');
+    for (let i = 1; i <= 4; i++) assert.ok(report.content.includes(`[M${i}-P1]`));
+    await page.getByRole('button', { name: '返回工作台继续分析', exact: true }).click();
+    await page.getByRole('button', { name: report.title, exact: true }).first().click();
+    await page.locator('.artifact-editor').getByRole('heading', { name: '多场访谈调研整合报告', exact: true }).waitFor();
+    const word = page.waitForEvent('download');
+    await page.getByRole('button', { name: '导出 Word', exact: true }).click();
+    const download = await word;
+    assert.ok(download.suggestedFilename().endsWith('.docx'));
+    await download.saveAs('data/qa/platform-ai/workbench-integrated-report.docx');
+    assert.equal(await download.failure(), null);
+    await page.getByRole('button', { name: '重新生成汇总报告', exact: true }).click();
+    await settled();
+    assert.ok(project.artifacts.find(a => a.id === report.id).stale, 'old report is retained as superseded output');
+    assert.equal(project.artifacts.filter(a => a.step === 5 && !a.stale).length, 1);
     assert.deepEqual(errors, []);
     fs.writeFileSync('data/qa/platform-ai/capture-result.json', JSON.stringify({ success: true, project: project.id, session: sid, checks: ['ASR failure allows navigation', 'failed audio survives refresh and retries', 'sidebar order', 'outline subset', 'refresh recovery', 'two independently decodable recording segments', 'raw transcript sync', 'memo sync', 'text import', 'audio import'], model: 'synthetic fixture' }, null, 2));
-    console.log('PASS: selected outline, persistent session, real MediaRecorder segments + FFmpeg, transcript/memo return, text and audio import. ASR/model mocked.');
+    console.log('PASS: multi-interview recording, pause/reload/resume, explicit finish, independent originals, four-source report, editable Word download and report regeneration. ASR/model mocked.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

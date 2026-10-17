@@ -35,6 +35,19 @@ class CaptureRecoveryTests(unittest.TestCase):
         return self.client.post(f"/api/sessions/{self.sid}/audio", data={"chunk_id": "retry-chunk-001"},
                                 files={"audio": ("silence.wav", self.audio, "audio/wav")})
 
+    def test_pause_is_persisted_but_only_finish_closes_the_session(self):
+        url = f"/api/sessions/{self.sid}/capture-state"
+        for state in ("recording", "paused", "recording"):
+            response = self.client.post(url, json={"state": state})
+            self.assertEqual(response.status_code, 200, response.text)
+            detail = self.client.get(f"/api/sessions/{self.sid}").json()
+            self.assertEqual(detail["status"], "live")
+            self.assertEqual(detail["recording_state"], state)
+        self.assertEqual(self.client.post(url, json={"state": "done"}).status_code, 422)
+        self.assertEqual(self.client.post(f"/api/sessions/{self.sid}/finish").status_code, 200)
+        self.assertEqual(store.get_session_summary(self.sid)["recording_state"], "ended")
+        self.assertEqual(self.client.post(url, json={"state": "recording"}).status_code, 409)
+
     def test_failed_transcription_can_retry_same_saved_recording_then_finish_silence(self):
         with patch("app.asr_dashscope.transcribe", side_effect=RuntimeError("provider unavailable")):
             failed = self.upload()

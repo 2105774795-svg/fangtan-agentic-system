@@ -11,6 +11,26 @@ import platform_ai
 
 
 class PlatformModelTests(unittest.TestCase):
+    def test_integrated_report_uses_template_and_both_interview_sources(self):
+        state = {"prompt": "合成市场调研", "scenario": "market", "answers": {}, "context": "", "messages": [],
+                 "interview_inventory": [{"id": "one", "subject": "张店主初访", "number": 1}, {"id": "two", "subject": "张店主补访", "number": 2}],
+                 "artifacts": [{"id": "m1", "title": "初访", "kind": "material", "source_session": "one", "content": "需要遮雨棚"},
+                               {"id": "m2", "title": "补访", "kind": "material", "source_session": "two", "content": "冷库足够"}]}
+        class Context:
+            def progress(self, *args): pass
+        def generated(messages, on_text, **kwargs):
+            self.assertIn("执行摘要", messages[0]["content"])
+            self.assertIn("六 关键分歧与研究风险", messages[0]["content"])
+            material = json.loads(messages[1]["content"])
+            self.assertEqual(material["原始材料"][1]["interview"]["subject"], "张店主补访")
+            self.assertIn("不等于独立受访人数", material["统计口径"])
+            return "# 合成整合报告\n\n需遮雨棚 [M1-P1]；冷库足够 [M2-P1]。"
+        with patch("platform_ai.stream", side_effect=generated):
+            result = platform_ai.generate("report", state, Context(), lambda _: None)
+        self.assertEqual(result["source_ids"], ["m1", "m2"])
+        with patch("platform_ai.stream", return_value="只引用初访 [M1-P1]"), self.assertRaises(ValueError):
+            platform_ai.generate("report", state, Context(), lambda _: None)
+
     def client(self, frames, status=200):
         content = "\n\n".join("data: " + (json.dumps(frame) if isinstance(frame, dict) else frame) for frame in frames)
         return httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(status, content=content.encode(), request=request)))

@@ -456,6 +456,25 @@
 .capture-history { margin-top: 24px; border-top: 1px solid var(--studio-border); }
 .capture-history > button { width: 100%; display: flex; align-items: center; gap: 8px; text-align: left; padding: 12px 0; font-size: 12px; border-bottom: 1px solid var(--studio-border); }
 .capture-history small { margin-left: auto; color: var(--studio-muted); font-size: 10px; }
+.capture-manager { display:flex; justify-content:space-between; align-items:center; gap:16px; padding-bottom:16px; border-bottom:1px solid var(--studio-border); margin-bottom:12px; }
+.capture-manager strong { font-size:14px; display:block; margin-bottom:5px; }
+.capture-manager span { font-size:11px; color:var(--studio-muted); }
+.capture-manager + .capture-history { border-top:0; margin:0 0 28px; max-height:230px; overflow:auto; }
+.capture-history > button { padding:12px 10px; border-radius:8px; }
+.capture-history > button.active { background:var(--studio-hover, #f4f1eb); }
+.capture-history button > span:nth-child(2) { display:grid; gap:5px; }
+.capture-history button strong { font-size:12px; font-weight:500; }
+.capture-history .interview-number { font-size:11px; color:var(--studio-muted); margin-right:4px; }
+.capture-history .capture-status { margin-left:auto; font-size:11px; color:var(--studio-accent); }
+.capture-history .capture-status.ended { color:#43856c; }
+.interview-title-input { display:grid; gap:9px; font-size:12px; margin:20px 0; }
+.interview-title-input input { border:1px solid var(--studio-border); border-radius:9px; padding:12px; background:var(--panel); color:var(--text); width:100%; }
+.interview-title-input small, .recording-state-label small { font-size:11px; line-height:1.7; color:var(--studio-muted); }
+.recording-state-label { font-size:13px; margin:20px 0 14px; display:grid; gap:6px; }
+.capture-end-confirm { margin-top:16px; border:1px solid var(--studio-border); border-radius:12px; padding:18px; }
+.capture-end-confirm h3 { font-size:14px; margin-bottom:10px; }
+.capture-end-confirm p { font-size:12px; color:var(--studio-muted); line-height:1.9; margin-bottom:16px; }
+.capture-end-confirm > div { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:10px; }
 .outline-check:focus-within { outline: 2px solid var(--studio-accent); outline-offset: 2px; }
 @media (max-width: 680px) { .interview-recorder { padding: 16px; } .recorder-heading, .recorder-next, .recording-footer { flex-direction: column; align-items: stretch; } .recorder-heading h2 { font-size: 20px; } .capture-history > button { flex-wrap: wrap; } }
 
