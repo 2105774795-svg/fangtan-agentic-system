@@ -407,6 +407,8 @@ HANDLERS = {"outline": handle_outline, "report": handle_report, "project_record"
 HANDLERS.update(MEMOIR_HANDLERS)
 from research_platform import execute_ai_job
 HANDLERS["research_platform"] = execute_ai_job
+from conversation_engine import HANDLERS as CONVERSATION_HANDLERS
+HANDLERS.update(CONVERSATION_HANDLERS)
 ON_CANCEL = {"import": cleanup_cancelled_import}
 ON_SUCCESS = {"import": import_after_success, "report": report_usage_after_success,
               "coverage": coverage_after_success}

@@ -118,6 +118,7 @@ def _save(db, state):
 def _public(db, state):
     layout = db.execute("SELECT version,positions FROM research_workspace_layouts WHERE project_id=?", (state["id"],)).fetchone()
     result = dict(state)
+    result["experience"] = "conversation" if state["scenario"] == "memoir" and state.get("mode") == "ai" else "workspace"
     if state.get("mode") == "ai" and state["stage"] == 0:
         industry = known_industry(state)
         result["known_industry"] = industry
@@ -305,7 +306,7 @@ def create_project(body: CreateProject):
         raise HTTPException(503, "模型尚未配置，请填写 backend/.env 后重启服务")
     # UUID5 makes a retried first submission resolve to the same persisted project.
     project_id = uuid.uuid5(uuid.NAMESPACE_URL, "fieldwork:" + body.request_id).hex
-    scenario = body.scenario or ("memoir" if any(w in prompt for w in ("口述", "回忆", "人生", "爷爷", "奶奶", "父亲", "母亲")) else
+    scenario = body.scenario or ("memoir" if any(w in prompt for w in ("口述", "回忆", "人生", "个人史", "自传", "往事", "童年", "爷爷", "奶奶", "姥姥", "姥爷", "父亲", "母亲")) else
                                 "enterprise" if any(w in prompt for w in ("企业", "公司", "创始人", "高管")) else "market")
     now = time.time()
     state = {"id": project_id, "title": prompt[:60], "prompt": prompt, "scenario": scenario,
@@ -333,7 +334,7 @@ def create_project(body: CreateProject):
         db.execute("INSERT INTO projects(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)",
                    (project_id, prompt[:60] + " · " + project_id[:6], LOCAL_OWNER, now, now))
         db.execute("INSERT INTO research_workspace_runs(project_id,revision,snapshot) VALUES(?,?,?)", (project_id, 1, json.dumps(state, ensure_ascii=False)))
-        if body.mode == "ai":
+        if body.mode == "ai" and scenario != "memoir":
             _schedule(db, state, "intake")
             db.execute("UPDATE research_workspace_runs SET snapshot=? WHERE project_id=?", (json.dumps(state, ensure_ascii=False), project_id))
         return _public(db, state)
@@ -357,7 +358,7 @@ def delete_project(project_id: str):
         now = time.time()
         db.execute("UPDATE research_workspace_runs SET deleted_at=? WHERE project_id=? AND deleted_at=0", (now, project_id))
         db.execute("UPDATE tasks SET status='cancelled',stage='cancelled',updated_at=?,finished_at=? "
-                   "WHERE kind='research_platform' AND resource_id=? AND status IN ('queued','running','retry')",
+                   "WHERE kind IN ('research_platform','conversation_reply','conversation_archive') AND resource_id=? AND status IN ('queued','running','retry')",
                    (now, now, project_id))
         db.execute("DELETE FROM research_workspace_layouts WHERE project_id=?", (project_id,))
     return {"id": project_id, "deleted": True}

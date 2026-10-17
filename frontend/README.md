@@ -77,3 +77,22 @@ Markdown 和选项回归：`node scripts/test-platform-markdown.cjs` 验证流�
 - 副标题参考 [MiMoCodeWeb 打字机说明](https://github.com/kklt-ai/MiMoCodeWeb/blob/main/docs/subtitle-typewriter-effect.md)：350ms 起步、55ms/字，完成后隐藏光标。文字预留完整尺寸；手机端和减少动态效果设置直接显示全文，窗口变化不重播。
 - 历史项目每行右侧可删除，先确认再提交；删除当前项目会回首页。后端逻辑删除并取消该项目的 AI 任务，旧链接和写入返回 404，原始访谈及录音保留。
 - 隔离浏览器验证：`node scripts/test-platform-home-delete.cjs`（配合 `scripts/serve-platform-test.py`，不删除日常项目）。
+
+### 可复用对谈与口述史
+
+新建真实 AI 口述史项目后，直接进入适老对谈页，跳过调研表单和画布。每个人物以平台项目为归属，可积累多场讲述。旧工作台中的资料在档案页保留，不自动当作本人原话。
+
+- 前端 `conversation/ConversationRoom.tsx` 是可复用语音/文字对谈界面，通过 endpoint、kind、copy 和导航回调接入业务。`useConversationAudio.ts` 负责原录音缓存复用、独立音频分片、整轮提交和停顿检测，业务不依赖 React Flow。
+- `backend/conversation_engine.py` 提供轮次、音频、SSE、任务重试和归档接口。`conversation_policies.py` 注册 memoir / interview 策略；当前产品入口接入口述史，面试已有策略和协议测试，未新增首页面试入口。
+- `MemoirExperience.tsx` 负责人物档案、逐次故事、人生线索、原话与原音、草稿修改/审阅和导出。修改整理稿保留版本，不更改本人原始讲述。
+- 录音每 10 秒生成一个独立可解码文件并转写，分片不触发 AI；只有讲完一轮（连续语音后默认停顿 5 秒，或点击“我说完了”）才生成回应。可选 3/5/8 秒。采用半双工，播报时可点击“我来说”。
+- 设备中文朗读使用本地 speechSynthesis；设备缺少中文语音时明确提示并保留文字模式。浏览器麦克风需 localhost 或 HTTPS，当前未实现全双工抢话、全方言保证、小程序或手机后台录音。
+- 项目沿用新版本地免登录范围。首次输入与启用麦克风需同意说明；没有恢复旧时叙录的独立认证，也没有开放其旧认证档案。
+
+除原 API 和后台 Worker 外，推荐再启动即时回应专用进程，避免长导入/归档任务阻塞对谈：
+
+```powershell
+.\.venv\Scripts\python.exe backend\conversation_worker.py
+```
+
+隔离验证：`python -m unittest discover -s backend/tests -p test_conversation_engine.py`；运行 `scripts/serve-platform-test.py` 后执行 `node scripts/test-conversation.cjs`。浏览器音频、ASR和播报为明确的夹具，另有 `scripts/smoke-conversation.py` 以合成文字实际调用配置的模型（会产生费用），不向日常档案写测试故事。

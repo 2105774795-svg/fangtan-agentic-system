@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, CircleNotch, FileArrowUp, Microphone, Pause, Play, UploadSimple, WarningCircle } from '@phosphor-icons/react';
 import { legacyApi, type Artifact, type Project } from './types';
 import { recordingOutbox, type AudioChunk } from './recordingOutbox';
+import { requestId } from './requestId';
 
 type Suggestion = { id: number; kind: string; status: string; payload: string };
 function suggestionData(item: Suggestion) { try { return JSON.parse(item.payload) as { scripts?: { text: string; why?: string }[]; consent?: { text: string }[]; question?: string }; } catch { return {}; } }
@@ -36,7 +37,7 @@ export function InterviewRecorder({ project, outlineArtifact, busy, command, onB
   const memoryChunks = useRef<AudioChunk[]>([]);
   const pumping = useRef<Promise<void> | null>(null);
   const input = useRef<HTMLInputElement>(null);
-  const creation = useRef(crypto.randomUUID());
+  const creation = useRef(requestId());
   const currentProject = useRef(project);
   currentProject.current = project;
   const syncingReport = useRef(false);
@@ -88,7 +89,7 @@ export function InterviewRecorder({ project, outlineArtifact, busy, command, onB
     setLocalBusy(true); setError('');
     try {
       const result = await commandRef.current({ action: 'start_interview', selected_questions: selected, outline_version: outlineArtifact?.version, request_id: creation.current });
-      if (result?.active_session_id) { setSid(result.active_session_id); setPhase('recording'); setConsent(false); setElapsed(0); creation.current = crypto.randomUUID(); }
+      if (result?.active_session_id) { setSid(result.active_session_id); setPhase('recording'); setConsent(false); setElapsed(0); creation.current = requestId(); }
     } finally { setLocalBusy(false); }
   }
   async function stop() {
@@ -115,7 +116,7 @@ export function InterviewRecorder({ project, outlineArtifact, busy, command, onB
       const startSegment = () => { stopWait.current = new Promise<void>(resolve => { stopped = resolve; }); active.start(); segmentTimer.current = window.setTimeout(() => { if (wantsRecording.current && active.state === 'recording') active.stop(); }, 10000); };
       active.ondataavailable = event => {
         if (!event.data.size) return;
-        const chunk = { id: crypto.randomUUID(), sid, blob: event.data, createdAt: Date.now(), order: Date.now() };
+        const chunk = { id: requestId(), sid, blob: event.data, createdAt: Date.now(), order: Date.now() };
         memoryChunks.current.push(chunk); setUnsavedAudio(true); setPending(value => value + 1);
         persistWait.current = persistWait.current.catch(() => undefined).then(async () => { await outbox.put(chunk); memoryChunks.current = memoryChunks.current.filter(item => item.id !== chunk.id); setUnsavedAudio(memoryChunks.current.length > 0); });
         void persistWait.current.then(() => pump(sid)).catch(cause => setError(memoryChunks.current.length ? '分片尚未保存到本机，请保持页面打开并重试：' + cause.message : '分片已保留，上传或转写未完成；可返回工作台，稍后重试：' + cause.message));
