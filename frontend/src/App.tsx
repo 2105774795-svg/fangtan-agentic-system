@@ -4,6 +4,8 @@ import { api, type Layout, type Project, type ProjectSummary, type Scenario, typ
 import { RevealBackdrop } from './RevealBackdrop';
 import { Workspace } from './Workspace';
 import { TypewriterSubtitle } from './TypewriterSubtitle';
+import { requestId } from './requestId';
+import { MemoirExperience } from './MemoirExperience';
 
 const sceneIcons = { market: Storefront, enterprise: Buildings, memoir: BookOpen };
 const fallbackNames = { market: '市场调研', enterprise: '企业访谈', memoir: '口述史' };
@@ -78,7 +80,7 @@ export function App() {
   async function create(prompt: string, scene?: Scene, sourceId?: string) {
     if (!prompt.trim() || busy) return;
     setBusy(true); setError('');
-    if (!creation.current || creation.current.prompt !== prompt || creation.current.scene !== scene || creation.current.sourceId !== sourceId) creation.current = { prompt, scene, sourceId, id: crypto.randomUUID() };
+    if (!creation.current || creation.current.prompt !== prompt || creation.current.scene !== scene || creation.current.sourceId !== sourceId) creation.current = { prompt, scene, sourceId, id: requestId() };
     try {
       const data = await api<Project>('/projects', { method: 'POST', body: JSON.stringify({ prompt: prompt.trim(), scenario: scene, mode: 'ai', source_project_id: sourceId, request_id: creation.current.id }) });
       setProject(data); setModal(null); history.pushState({}, '', `/?project=${data.id}`);
@@ -98,7 +100,9 @@ export function App() {
     finally { setBusy(false); }
   }
   useEffect(() => {
-    if (!project?.id) return;
+    if (!project?.id || (project.scenario === 'memoir' && project.mode === 'ai')) return;
+    // The conversation surface owns its SSE stream; avoid duplicate long-lived
+    // HTTP/1 connections that can otherwise starve microphone uploads across tabs.
     const id = project.id;
     const stream = new EventSource(`/api/platform/projects/${id}/events`);
     stream.addEventListener('snapshot', event => {
@@ -110,7 +114,7 @@ export function App() {
     stream.addEventListener('deleted', () => { stream.close(); setProject(previous => previous?.id === id ? null : previous); setProjects(previous => previous.filter(item => item.id !== id)); history.replaceState({}, '', '/'); });
     stream.onerror = () => setProject(previous => previous?.id === id ? { ...previous, connection_lost: true } : previous);
     return () => stream.close();
-  }, [project?.id]);
+  }, [project?.id, project?.scenario, project?.mode]);
   async function saveLayout(positions: Layout['positions']) {
     if (!project) return;
     try {
@@ -134,19 +138,19 @@ export function App() {
   function closeModal() { if (deleting) return; if (deleteTarget) setDeleteTarget(null); else setModal(null); }
   function home() { setProject(null); setError(''); history.pushState({}, '', '/'); void loadLists().catch(() => {}); }
   return <>
-    {project && scenarios ? <Workspace key={project.id} project={project} scenarios={scenarios} busy={busy} command={command} onLayout={saveLayout} onStartAI={() => void create(project.prompt, project.scenario, project.id)} onHome={home} onHistory={() => setModal('history')}/>
+    {project && scenarios ? project.scenario === 'memoir' && project.mode === 'ai' ? <MemoirExperience key={project.id} project={project} onHome={home} onHistory={() => setModal('history')}/> : <Workspace key={project.id} project={project} scenarios={scenarios} busy={busy} command={command} onLayout={saveLayout} onStartAI={() => void create(project.prompt, project.scenario, project.id)} onHome={home} onHistory={() => setModal('history')}/>
       : <Home busy={busy || booting} projects={projects} onCreate={create} onOpen={openProject} onHistory={() => setModal('history')} onGuide={() => setModal('guide')} theme={theme} onTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}/>}
     {error && <div className="error-toast" role="alert"><WarningCircle size={20}/><span>{error}</span>{project && <button onClick={() => location.reload()}>重新加载</button>}{!project && <button onClick={() => { setError(''); void loadLists().catch(e => setError(e.message)); }}>重试</button>}<button aria-label="关闭错误提示" onClick={() => setError('')}><X size={16}/></button></div>}
     {modal && <div className="modal-backdrop" onClick={closeModal}><section ref={modalRef} className="modal" role="dialog" aria-modal="true" aria-label={deleteTarget ? '删除项目' : modal === 'history' ? '历史项目' : '使用指南'} onClick={e => e.stopPropagation()}><div className="modal-heading"><h2>{deleteTarget ? '删除这个项目？' : modal === 'history' ? '你的调研项目' : '从一个问题开始'}</h2><button className="icon-button" autoFocus aria-label="关闭" disabled={deleting} onClick={closeModal}><X size={20}/></button></div>
       {deleteTarget ? <div className="project-delete-confirm"><div className="delete-project-name"><FolderSimple size={22}/><strong>{deleteTarget.title}</strong></div><p>删除后，项目及其对话、文档将从工作台移除，无法在这里恢复。</p><p className="muted">该项目正在运行的 AI 任务会停止。原始访谈录音保留，不会同时删除。</p><div className="delete-actions"><button className="secondary" autoFocus disabled={deleting} onClick={() => setDeleteTarget(null)}>取消</button><button className="danger-button" disabled={deleting} onClick={() => void deleteProject()}>{deleting ? '正在删除…' : '删除项目'}</button></div></div> : modal === 'history' ? <><label className="search-box"><MagnifyingGlass size={18}/><input autoFocus placeholder="搜索项目名称" value={query} onChange={e => setQuery(e.target.value)}/></label><div className="history-list">{projects.filter(p => p.title.includes(query)).map(p => <ProjectRow key={p.id} item={p} onClick={() => void openProject(p.id)} onDelete={() => setDeleteTarget(p)}/>)}{!projects.filter(p => p.title.includes(query)).length && <div className="empty-state"><FolderSimple size={36}/><p>{query ? '没有找到相关项目' : '还没有项目，写下第一个调研问题吧'}</p></div>}</div></>
-        : <div className="guide-content"><p>把想了解的人、企业或地方告诉体察。从市场调研、企业访谈、口述史中选择适合的流程。</p><ol><li>选一选，确认目标与范围。</li><li>沿着画布，查看准备计划与提纲。</li><li>打开成果修改，保存版本或导出。</li></ol><aside>新建项目已接入真实 AI：确认需求后，生成背景与提纲，勾选提纲中的问题进入录音，也可导入已有录音或文字稿，再进行分析和报告整理。生成内容需核对来源与原文。手机接续尚未接入，当前无需登录。</aside></div>}
+        : <div className="guide-content"><p>把想了解的人、企业或地方告诉体察。市场调研与企业访谈进入工作台；口述史直接进入对谈，聊天结束后整理到人生档案。</p><ol><li>选一选，确认目标与范围。</li><li>沿着画布，查看准备计划与提纲。</li><li>打开成果修改，保存版本或导出。</li></ol><aside>新建项目已接入真实 AI：确认需求后，生成背景与提纲，勾选提纲中的问题进入录音，也可导入已有录音或文字稿，再进行分析和报告整理。生成内容需核对来源与原文。手机接续尚未接入，当前无需登录。</aside></div>}
     </section></div>}
   </>;
 }
 
 function ProjectRow({ item, onClick, onDelete }: { item: ProjectSummary; onClick: () => void; onDelete?: () => void }) {
   const Icon = sceneIcons[item.scenario];
-  return <div className="project-row" data-project-id={item.id}><button className="project-row-open" onClick={onClick}><span className="project-icon"><Icon size={21}/></span><span className="project-row-text"><strong>{item.title}</strong><small>{item.mode === 'ai' ? 'AI 调研' : '历史示例'} · {fallbackNames[item.scenario]} · {item.stage ? '进行中' : '待确认需求'}</small></span><time>{new Date(item.updated_at * 1000).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</time><ArrowUpRight size={17}/></button>{onDelete && <button className="project-row-delete" aria-label={`删除项目：${item.title}`} title="删除项目" onClick={onDelete}><Trash size={17}/></button>}</div>;
+  return <div className="project-row" data-project-id={item.id}><button className="project-row-open" onClick={onClick}><span className="project-icon"><Icon size={21}/></span><span className="project-row-text"><strong>{item.title}</strong><small>{item.mode === 'ai' ? 'AI 调研' : '历史示例'} · {fallbackNames[item.scenario]} · {item.scenario === 'memoir' && item.mode === 'ai' ? '对谈与人生档案' : item.stage ? '进行中' : '待确认需求'}</small></span><time>{new Date(item.updated_at * 1000).toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })}</time><ArrowUpRight size={17}/></button>{onDelete && <button className="project-row-delete" aria-label={`删除项目：${item.title}`} title="删除项目" onClick={onDelete}><Trash size={17}/></button>}</div>;
 }
 
 function Home({ busy, projects, onCreate, onOpen, onHistory, onGuide, theme, onTheme }: { busy: boolean; projects: ProjectSummary[]; onCreate: (p: string, s?: Scene) => void; onOpen: (id: string) => void; onHistory: () => void; onGuide: () => void; theme: string; onTheme: () => void }) {

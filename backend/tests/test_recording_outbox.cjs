@@ -14,6 +14,7 @@ vm.runInContext(fs.readFileSync(path.join(root,'backend/static/assets/recording-
   assert.deepEqual(rows.map(row=>row.id),['z-first','a-second'],'相同时间的分片应按采集顺序而非 UUID 排序');
   assert.equal(await rows[0].blob.text(),'first');
   await window.RecordingStore.remove(first.id);rows=await window.RecordingStore.list('session-one');assert.equal(rows.length,1);
+  assert.equal((await window.RecordingStore.list('session-two'))[0].order,0,'零编号必须保留，不能被时间戳替代');
   assert.equal((await window.RecordingStore.list('session-two')).length,1,'确认上传只清理对应分片，不影响其他访谈');
 
   const waveSource=fs.readFileSync(path.join(root,'harmonyos/entry/src/main/ets/recording/Wave.ets'),'utf8');

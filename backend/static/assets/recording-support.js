@@ -15,9 +15,9 @@
     });
   }
   window.RecordingStore={
-    put:job=>transaction('readwrite',store=>store.put({id:job.id,sid:job.sid,blob:job.blob,createdAt:job.createdAt||Date.now(),order:job.order||job.createdAt||Date.now(),attempts:0})),
+    put:job=>transaction('readwrite',store=>store.put({id:job.id,sid:job.sid,blob:job.blob,createdAt:job.createdAt||Date.now(),order:job.order??job.createdAt??Date.now(),attempts:0})),
     remove:id=>transaction('readwrite',store=>store.delete(id)),
-    list:async sid=>(await transaction('readonly',store=>store.getAll())).filter(job=>job.sid===sid).sort((a,b)=>(a.order||a.createdAt)-(b.order||b.createdAt))
+    list:async sid=>(await transaction('readonly',store=>store.getAll())).filter(job=>job.sid===sid).sort((a,b)=>(a.order??a.createdAt)-(b.order??b.createdAt))
   };
   const calls=new Map();
   window.fangtanNativeResult=message=>{

@@ -18,6 +18,7 @@ import app
 import worker
 import research_platform
 import task_handlers
+import conversation_engine
 import uvicorn
 
 
@@ -52,15 +53,30 @@ def model_fixture(kind, state, ctx, on_text):
     return {"content": content, "research": {"status": "not_requested", "note": "隔离测试未联网", "sources": []}, "source_ids": [a["id"] for a in state["artifacts"] if a.get("kind") == "material"]}
 
 
+def conversation_stream(messages, on_text, **kwargs):
+    text = "您提到和母亲赶集的往事，那时最盼着吃到什么？"
+    for start in range(0, len(text), 3):
+        on_text(text[start:start + 3])
+        time.sleep(.12)
+    return text
+
+
+def conversation_archive(system, block):
+    evidence = [{"turn_id": row["turn_id"], "quote": row["text"]} for row in block[:3]]
+    if 'events' in system:
+        return {"events": [{"title": "童年赶集", "description": "记录了和母亲赶集的回忆。", "date_text": "未提及", "status": "candidate", "evidence": evidence}]}
+    return {"paragraphs": [{"text": "小时候，母亲经常带我去赶集。", "evidence": evidence}]}
+
+
 stop = threading.Event()
 def work():
     while not stop.is_set():
-        if not worker.run_once(handlers={"research_platform": research_platform.execute_ai_job, "report": task_handlers.handle_report, "import": task_handlers.handle_import}):
+        if not worker.run_once(handlers={"research_platform": research_platform.execute_ai_job, "report": task_handlers.handle_report, "import": task_handlers.handle_import, **conversation_engine.HANDLERS}):
             stop.wait(.1)
 
 
 if __name__ == "__main__":
-    with patch("platform_ai.generate", side_effect=model_fixture), patch("kimi.gen_report", return_value="# 合成纪要\n\n仅为隔离测试。"), patch("kimi.gen_followup", return_value=None), patch("asr_dashscope.transcribe", return_value="受访者：最近顾客提出延长营业时间的建议。这是合成音频转写。"):
+    with patch("platform_ai.stream", side_effect=conversation_stream), patch("memoir.handlers._chat", side_effect=conversation_archive), patch("platform_ai.generate", side_effect=model_fixture), patch("kimi.gen_report", return_value="# 合成纪要\n\n仅为隔离测试。"), patch("kimi.gen_followup", return_value=None), patch("asr_dashscope.transcribe", return_value="受访者：最近顾客提出延长营业时间的建议。这是合成音频转写。"):
 
         thread = threading.Thread(target=work, daemon=True)
         thread.start()
