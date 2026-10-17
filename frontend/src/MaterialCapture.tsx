@@ -1,0 +1,13 @@
+import { useEffect, useRef, useState } from 'react';
+import { FileText, FloppyDisk, UploadSimple } from '@phosphor-icons/react';
+import type { Project } from './types';
+
+export function MaterialCapture({ project, busy, onSave, onOpen, onDirty }: { project: Project; busy: boolean; onSave: (title: string, content: string) => Promise<boolean>; onOpen: (id: string) => void; onDirty: (dirty: boolean) => void }) {
+  const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
+  const [error, setError] = useState('');
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => { onDirty(!!content.trim()); return () => onDirty(false); }, [content, onDirty]);
+  const materials = project.artifacts.filter(item => item.kind === 'material');
+  return <section className="material-capture"><div className="material-heading"><h2>添加原始文字材料</h2><button className="secondary" disabled={busy} onClick={() => input.current?.click()}><UploadSimple size={16}/>导入 TXT / MD</button><input hidden type="file" accept=".txt,.md" ref={input} onChange={async event => { const file = event.target.files?.[0]; if (!file) return; setError(''); if (!/\.(txt|md)$/i.test(file.name) || file.size > 2 * 1024 * 1024) { setError('请选择不超过 2 MB 的 TXT 或 Markdown 文件'); return; } try { const text = await file.text(); if (text.length > 20000 || text.includes('\u0000')) { setError('单份材料上限为 20000 字，请拆分或转为 UTF-8 文本'); return; } setTitle(file.name); setContent(text); } catch { setError('无法读取该文件，请尝试直接粘贴文字'); } event.target.value = ''; }}/></div><p>粘贴真实访谈、会议文字稿或人物讲述。AI 将根据这些原文分析，并以材料段落标记引用。</p><label>材料名称<input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} placeholder="例如：店主访谈 · 第一场"/></label><label>原始内容<textarea aria-label="原始材料正文" rows={12} value={content} maxLength={20000} onChange={event => setContent(event.target.value)} placeholder="将访谈原文粘贴在这里。建议每个自然段单独一行，便于定位出处。"/></label>{error && <p role="alert">{error}</p>}<div className="material-actions"><span>{content.length} / 20000 字 · 单项目合计上限 50000 字</span><button className="primary" disabled={busy || !content.trim()} onClick={async () => { if (await onSave(title, content)) { setTitle(''); setContent(''); } }}><FloppyDisk size={16}/>保存原始材料</button></div><div className="material-existing"><h3>已保存材料 · {materials.length}</h3>{materials.map(item => <button key={item.id} onClick={() => onOpen(item.id)}><FileText size={17}/><span>{item.title}</span><small>{item.content.length} 字 · v{item.version}</small></button>)}</div><aside className="panel-note">也可以返回现场采集页，进行录音或导入已有录音。此处保存的原始文字将作为分析依据。</aside></section>;
+}

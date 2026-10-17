@@ -51,6 +51,33 @@ class DashScopeNoWordsTests(unittest.TestCase):
                     patch("asr_dashscope.time.time", return_value=0):
                 return asr_dashscope._transcribe_filetrans(audio.name, 10, diarization=diarization)
 
+    def test_inline_no_words_is_completed_without_transcript(self):
+        from unittest.mock import MagicMock
+        import httpx
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "silence.wav"
+            path.write_bytes(b"fixture")
+            for status, body in ((200, {"code": "ASR_RESPONSE_HAVE_NO_WORDS"}),
+                                 (400, {"code": "CLIENT_ERROR", "message": "ASR_RESPONSE_HAVE_NO_WORDS"})):
+                response = httpx.Response(status, json=body,
+                                          request=httpx.Request("POST", "https://fixture.test"))
+                client = MagicMock()
+                client.__enter__.return_value.post.return_value = response
+                with patch("asr_dashscope.httpx.Client", return_value=client):
+                    self.assertEqual(asr_dashscope._transcribe_inline(str(path)), "")
+
+    def test_inline_provider_failure_is_not_treated_as_silence(self):
+        from unittest.mock import MagicMock
+        import httpx
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "speech.wav"
+            path.write_bytes(b"fixture")
+            client = MagicMock()
+            client.__enter__.return_value.post.return_value = httpx.Response(
+                429, json={"code": "Throttling"}, request=httpx.Request("POST", "https://fixture.test"))
+            with patch("asr_dashscope.httpx.Client", return_value=client), self.assertRaisesRegex(RuntimeError, "HTTP 429"):
+                asr_dashscope._transcribe_inline(str(path))
+
     def test_failed_task_with_no_words_is_an_empty_segment(self):
         result = self._run({"output": {"task_status": "FAILED",
                                        "code": "ASR_RESPONSE_HAVE_NO_WORDS",

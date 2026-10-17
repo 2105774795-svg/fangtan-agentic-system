@@ -47,6 +47,7 @@ from services.inline_context import SessionContext
 from services.downloads import TemporaryDownloadResponse
 from services.materials import load_project_materials, location_text
 from memoir import api as memoir_api, auth as memoir_auth, store as memoir_store
+import research_platform
 
 app = FastAPI(title="访谈-体察", redirect_slashes=False)
 app.mount(
@@ -69,6 +70,10 @@ memoir_store.init()
 memoir_auth.init()
 app.include_router(task_api.router)
 app.include_router(memoir_api.router)
+research_platform.init()
+app.include_router(research_platform.router)
+app.mount("/platform-assets", StaticFiles(directory=Path(__file__).parent / "static" / "platform" / "platform-assets", check_dir=False), name="platform-assets")
+app.mount("/platform-media", StaticFiles(directory=Path(__file__).parent / "static" / "platform-media", check_dir=False), name="platform-media")
 config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 config.REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -411,8 +416,16 @@ def _run_auto_naming(sid: str, attempt_id: int):
 # ---------- 静态前端 ----------
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    platform_index = Path(__file__).parent / "static" / "platform" / "index.html"
+    if platform_index.exists():
+        return HTMLResponse(platform_index.read_text(encoding="utf-8"))
     html = (Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8")
     return HTMLResponse(html)
+
+
+@app.get("/legacy", response_class=HTMLResponse)
+async def legacy_index():
+    return HTMLResponse((Path(__file__).parent / "static" / "index.html").read_text(encoding="utf-8"))
 
 
 # ---------- API ----------
@@ -537,6 +550,8 @@ async def get_session(sid: str, request: Request):
     summary["outline"] = json.loads(summary.get("outline") or "[]")
     summary.pop("report_markdown", None)
     summary["utterances"] = store.list_utterances(sid, last_n=10000)
+    if summary["status"] == "done" and not summary["utterances"] and not summary["has_report"]:
+        summary["report_status"] = "empty"
     summary["suggestions"] = [s for s in store.list_suggestions(sid) if s["kind"] != "auto_naming"]
     summary["coverage"] = _coverage(sid)
     summary["access"] = access
@@ -965,7 +980,8 @@ async def upload_chunk(sid: str, request: Request, audio: UploadFile = File(...)
         raise HTTPException(400, "无效录音分片编号")
     seq = await run_in_threadpool(_process_chunk, sid, raw,
                                   audio.filename or "chunk.webm", chunk_id)
-    return {"seq": seq}
+    return {"seq": seq, "audio_saved": True,
+            "transcription_status": "ready" if store.get_utterance(sid, seq) else "no_speech"}
 
 
 def _session_exists(sid: str) -> bool:
@@ -1296,7 +1312,15 @@ async def finish(sid: str, request: Request, background: bool = False):
                              "report_status": "generating"}, status_code=202)
     if importing and not store.list_utterances(sid, last_n=1):
         raise HTTPException(409, "材料尚未成功归档，请重新导入后生成纪要")
+    with store.get() as db:
+        pending_audio = db.execute("SELECT 1 FROM audio_receipts WHERE session_id=? AND status='pending' LIMIT 1", (sid,)).fetchone()
+    if pending_audio:
+        raise HTTPException(409, "录音已保存，仍有分片待转写；可以离开页面稍后重试，完成后再结束访谈")
     await run_in_threadpool(_close_session, sid)
+    if not store.list_utterances(sid, last_n=1):
+        # Silence is a completed recording, not a failed or endlessly queued report.
+        REPORT_JOBS.pop(sid, None)
+        return {"session_id": sid, "report_status": "empty", "report": None}
     if summary.get("subject_source") == "default":
         _schedule_auto_naming(sid, "finish")
     if store.get_report(sid) is not None:

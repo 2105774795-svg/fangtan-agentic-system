@@ -12,7 +12,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "test:frontend": "node scripts/run-frontend-tests.cjs"
+    "test:frontend": "node scripts/run-frontend-tests.cjs",
+    "dev:platform": "npm --prefix frontend run dev",
+    "build:platform": "npm --prefix frontend run build",
+    "test:platform": "node scripts/test-platform.cjs"
   },
   "devDependencies": {
     "fake-indexeddb": "6.2.5",
