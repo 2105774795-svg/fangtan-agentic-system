@@ -9,7 +9,7 @@ const base = 'http://127.0.0.1:18998';
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     const errors = []; page.on('pageerror', error => errors.push(error.message));
     await page.goto(base);
-    await page.getByLabel('今天您想调研什么？').fill('我想调研上海新能源汽车的市场情况');
+    await page.getByLabel('今天想准备哪一次对话？').fill('我想调研上海新能源汽车的市场情况');
     await page.getByRole('button', { name: '开始调研', exact: true }).click();
     const live = page.locator('.streamed-response');
     await live.locator('strong').first().waitFor();

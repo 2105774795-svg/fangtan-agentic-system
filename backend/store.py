@@ -46,6 +46,8 @@ def init():
         # Compatibility migration: add only the title provenance field. Never rebuild
         # the sessions table, so existing sessions and foreign references are kept.
         session_cols = [r["name"] for r in db.execute("PRAGMA table_info(sessions)").fetchall()]
+        if "purpose" not in session_cols:
+            db.execute("ALTER TABLE sessions ADD COLUMN purpose TEXT NOT NULL DEFAULT 'research_capture'")
         if "subject_source" not in session_cols:
             db.execute("ALTER TABLE sessions ADD COLUMN subject_source TEXT DEFAULT 'default'")
         if "industry" not in session_cols:
@@ -193,7 +195,7 @@ def list_sessions(limit=100, offset=0, user_id=None, search="", project="", scop
     limit = max(1, min(int(limit), 500))
     offset = max(0, int(offset))
     with get() as db:
-        filters = ["s.status != 'deleting'"]
+        filters = ["s.status != 'deleting'", "s.purpose != 'interview_answer'"]
         params = []
         if user_id is not None:
             if scope == "mine":

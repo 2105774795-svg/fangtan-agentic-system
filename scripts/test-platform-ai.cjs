@@ -16,7 +16,7 @@ fs.mkdirSync(output, { recursive: true });
       await page.waitForTimeout(300);
     }
     await page.goto('http://127.0.0.1:18998/');
-    await page.getByLabel('今天您想调研什么？').fill('锦州市市场调研');
+    await page.getByLabel('今天想准备哪一次对话？').fill('锦州市市场调研');
     await page.getByRole('button', { name: '开始调研', exact: true }).click();
     await page.locator('.live-generation .streamed-response').waitFor();
     assert.equal(await page.locator('.briefing-card').count(), 0, 'choices wait for the actual stream to finish');

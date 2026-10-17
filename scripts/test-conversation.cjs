@@ -13,7 +13,7 @@ const output = 'data/qa/conversation'; fs.mkdirSync(output, { recursive: true })
   });
   const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(base);
-  await page.getByLabel('今天您想调研什么？').fill('我想记录爷爷的口述史 ' + Date.now());
+  await page.getByLabel('今天想准备哪一次对话？').fill('我想记录爷爷的口述史 ' + Date.now());
   await page.getByRole('button', { name: '开始调研', exact: true }).click();
   await page.getByText('您好，很高兴和您聊聊天。以后我应该怎么称呼您？', { exact: true }).waitFor();
   assert.equal(await page.getByTestId('research-map').count(), 0);

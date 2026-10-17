@@ -39,7 +39,7 @@ fs.mkdirSync(output, { recursive: true });
   await page.getByRole('button', { name: /移动光标，探索底图/ }).click();
   await page.screenshot({ path: path.join(output, '02-home-relief.png'), fullPage: true, animations: 'disabled' });
   await page.getByRole('button', { name: /恢复光标擦除/ }).click();
-  await page.getByLabel('今天您想调研什么？').fill('锦州市市场调研');
+  await page.getByLabel('今天想准备哪一次对话？').fill('锦州市市场调研');
   await page.getByRole('button', { name: '开始调研' }).click();
   await page.getByTestId('research-map').waitFor();
   await page.locator('.map-branch').first().waitFor({ state: 'visible' });
