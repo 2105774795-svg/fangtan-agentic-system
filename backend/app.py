@@ -969,6 +969,18 @@ def _run_import_job(job_id: str):
             logger.warning("import temporary file cleanup failed job_id=%s path=%s", job_id, path.parent)
 
 
+@app.post("/api/sessions/{sid}/capture-state")
+async def update_capture_state(sid: str, body: dict, request: Request):
+    _require_session(sid, request, write=True)
+    state = body.get("state")
+    if state not in {"recording", "paused"}:
+        raise HTTPException(422, "无效的录音状态")
+    with store.get() as db:
+        if not db.execute("UPDATE sessions SET recording_state=? WHERE id=? AND status='live'", (state, sid)).rowcount:
+            raise HTTPException(409, "本场访谈已结束，请新建访谈")
+    return {"recording_state": state}
+
+
 @app.post("/api/sessions/{sid}/audio")
 async def upload_chunk(sid: str, request: Request, audio: UploadFile = File(...), chunk_id: str = Form("")):
     _require_session(sid, request, write=True)
@@ -1054,6 +1066,8 @@ def _process_chunk(sid: str, raw: bytes, filename: str, chunk_id="") -> int:
             shutil.copy2(wav_path, recording_dir / f"{seq:05d}.wav")
             with wave.open(str(wav_path), "rb") as audio_part:
                 end_ms = start_ms + round(audio_part.getnframes() * 1000 / audio_part.getframerate())
+            with store.get() as db:
+                db.execute("UPDATE sessions SET recorded_ms=MAX(COALESCE(recorded_ms,0),?) WHERE id=?", (end_ms, sid))
             if chunk_id:
                 store.save_audio_receipt(sid, chunk_id, digest, seq)
             if receipt and store.get_utterance(sid, seq):

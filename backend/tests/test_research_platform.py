@@ -213,6 +213,104 @@ class ResearchPlatformTests(unittest.TestCase):
         self.assertEqual(self.command(again, "sync_session", session_id="unrelated").status_code, 404)
         self.assertEqual(platform.outline_questions("# 只有说明\n这里没有任何实际问题。"), [])
 
+    def test_multiple_interviews_keep_separate_evidence_and_resume_selection(self):
+        project = self.ai_project()
+        self.run_ai()
+        with store.get() as db:
+            state = platform._read(db, project["id"])
+            state["stage"] = 2
+            platform._artifact(state, 2, "提纲", "- 最近经营如何？", origin="ai")
+            platform._save(db, state)
+        project = platform.project(project["id"])
+        args = {"selected_questions": ["最近经营如何？"], "outline_version": 1}
+        project = self.command(project, "start_interview", **args, title="张店主初访", request_id="first-interview").json()
+        first = project["active_session_id"]
+        store.add_utterance(first, 0, 0, 1000, "初访：需要遮雨棚。")
+        project = self.command(project, "start_interview", **args, title="张店主补访", request_id="second-interview").json()
+        second = project["active_session_id"]
+        self.assertNotEqual(first, second)
+        self.assertEqual([s["subject"] for s in project["interviews"]], ["张店主初访", "张店主补访"])
+        self.assertEqual(store.get_session_summary(first)["status"], "live")
+        project = self.command(project, "select_interview", session_id=first).json()
+        self.assertEqual(platform.project(project["id"])["active_session_id"], first)
+        self.assertEqual(self.command(project, "select_interview", session_id="another-project").status_code, 404)
+        store.finish_session(first)
+        project = self.command(project, "sync_session", session_id=first).json()
+        store.add_utterance(second, 0, 0, 1000, "补访：现有冷库足够使用。")
+        store.finish_session(second)
+        with patch.object(platform.config, "KIMI_API_KEY", "fake"):
+            self.assertEqual(self.command(project, "advance").status_code, 409, "Unsynced interviews must not be silently omitted")
+        project = self.command(project, "sync_session", session_id=second).json()
+        project = self.command(project, "sync_session", session_id=first).json()
+        raw = [a for a in project["artifacts"] if a.get("kind") == "material"]
+        self.assertEqual(len(raw), 2)
+        self.assertEqual([a["source_session"] for a in raw], [first, second])
+        self.assertIn("遮雨棚", raw[0]["content"])
+        self.assertIn("冷库", raw[1]["content"])
+        self.assertTrue(all(item["synced"] for item in project["interviews"]))
+        def generate(kind, snapshot, ctx, on_text):
+            self.assertEqual([item["id"] for item in snapshot["interview_inventory"]], [first, second])
+            return {"content": "两次访谈反映不同需求 [M1-P1] [M2-P1]", "source_ids": [a["id"] for a in raw]}
+        with patch.object(platform.config, "KIMI_API_KEY", "fake"):
+            project = self.command(project, "advance").json()
+        with patch("platform_ai.generate", side_effect=generate):
+            self.assertTrue(worker.run_once(handlers={"research_platform": platform.execute_ai_job}))
+
+    def test_report_word_export_is_scoped_and_rejects_stale_report(self):
+        import io
+        import zipfile
+        import xml.etree.ElementTree as ET
+        project = self.create()
+        with store.get() as db:
+            state = platform._read(db, project["id"])
+            report = platform._artifact(state, 5, "成果归档", "# 合成调研整合报告\n报告日期：2026年10月17日\n\n## 执行摘要\n**两场**访谈，各自保留出处。\n\n| 对象 | 需求 |\n| --- | --- |\n| 初访 | 遮雨棚 |\n| 补访 | 无新增冷库需求 |\n\n## 一 研究范围与判读方法\n场次不等于人数。")
+            platform._save(db, state)
+        url = f"/api/platform/projects/{project['id']}/artifacts/{report['id']}/export"
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200, response.text[:100] if response.status_code != 200 else "")
+        self.assertIn("wordprocessingml", response.headers["content-type"])
+        with zipfile.ZipFile(io.BytesIO(response.content)) as z:
+            doc = ET.fromstring(z.read("word/document.xml"))
+            ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+            self.assertEqual(len(doc.findall('.//w:tbl', ns)), 1)
+            self.assertEqual(len(doc.findall('.//w:tblHeader', ns)), 1)
+            self.assertNotIn('**', ''.join(doc.itertext()))
+            self.assertIn('目录', ''.join(doc.itertext()))
+            self.assertIn('footer1.xml', z.read('word/_rels/document.xml.rels').decode())
+        self.assertEqual(self.client.get(url.replace(report['id'], 'unrelated')).status_code, 404)
+        with store.get() as db:
+            state = platform._read(db, project["id"])
+            state["artifacts"][-1]["stale"] = True
+            platform._save(db, state)
+        self.assertEqual(self.client.get(url).status_code, 409)
+
+    def test_report_regeneration_preserves_previous_report_and_requires_current_analysis(self):
+        project = self.ai_project()
+        self.run_ai()
+        with store.get() as db:
+            state = platform._read(db, project["id"])
+            state.update(stage=5, completed=True)
+            platform._artifact(state, 3, "原始材料", "真实讲述。", kind="material", origin="user")
+            old = platform._artifact(state, 5, "旧汇总报告", "# 旧报告正文", origin="ai")
+            platform._save(db, state)
+        project = platform.project(project["id"])
+        self.assertEqual(self.command(project, "regenerate_report").status_code, 409)
+        with store.get() as db:
+            state = platform._read(db, project["id"])
+            platform._artifact(state, 4, "分析", "已整理 [M1-P1]", origin="ai")
+            platform._save(db, state)
+        project = platform.project(project["id"])
+        with patch.object(platform.config, "KIMI_API_KEY", "fake"):
+            project = self.command(project, "regenerate_report").json()
+        self.assertEqual(project["job"]["kind"], "report")
+        self.assertFalse(project["completed"])
+        previous = next(a for a in project["artifacts"] if a["id"] == old["id"])
+        self.assertTrue(previous["stale"])
+        self.assertEqual(previous["content"], "# 旧报告正文")
+        self.run_ai()
+        project = platform.project(project["id"])
+        self.assertEqual(len([a for a in project["artifacts"] if a["step"] == 5 and not a.get("stale")]), 1)
+
     def test_known_industry_and_custom_goal_audience_are_preserved(self):
         with patch.object(platform.config, "KIMI_API_KEY", "fake"):
             response = self.client.post("/api/platform/projects", json={"prompt": "我想调研上海新能源汽车的市场情况", "scenario": "market", "request_id": "known-industry-custom", "mode": "ai"})
@@ -240,6 +338,38 @@ class ResearchPlatformTests(unittest.TestCase):
         self.assertIn(custom["audience"], project["artifacts"][0]["content"])
         self.assertIn("新能源汽车", project["artifacts"][0]["content"])
         self.assertEqual(platform.known_industry({"scenario": "market", "prompt": "不考虑新能源汽车，只想研究咖啡市场"}), "咖啡")
+
+    def test_refined_industry_accepts_initial_auto_value_but_rejects_invalid_choices(self):
+        with patch.object(platform.config, "KIMI_API_KEY", "fake"):
+            response = self.client.post("/api/platform/projects", json={"prompt": "想调研锦州精品咖啡市场", "scenario": "market", "request_id": "refined-industry-test", "mode": "ai"})
+        initial = response.json()
+        self.assertEqual(initial["answers"]["industry"], ["咖啡"])
+        def intake(*args):
+            return {"intake": {"scenario": "market", "industry": "精品咖啡", "title": "锦州精品咖啡调研", "reply": "请选择目标与受访对象。", "location": {}}}
+        with patch("platform_ai.generate", side_effect=intake):
+            worker.run_once(handlers={"research_platform": platform.execute_ai_job})
+        project = platform.project(initial["id"])
+        self.assertEqual(project["known_industry"], "精品咖啡")
+        answers = self.answers("market")
+        for invalid in (["不存在"], ["咖啡", "制造业"], ["咖啡", "咖啡"]):
+            answers["industry"] = invalid
+            self.assertEqual(self.command(project, "draft", answers=answers).status_code, 422)
+        answers["industry"] = initial["answers"]["industry"]
+        with patch.object(platform.config, "KIMI_API_KEY", "fake"):
+            result = self.command(project, "brief", answers=answers)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["answers"]["industry"], ["精品咖啡"])
+        self.assertIn("精品咖啡", result.json()["artifacts"][0]["content"])
+
+    def test_every_visible_market_industry_radio_is_valid(self):
+        project = self.ai_project()
+        self.run_ai()
+        project = platform.project(project["id"])
+        for option in platform.SCENARIOS["market"]["fields"][0]["options"]:
+            result = self.command(project, "draft", answers={"industry": [option]})
+            self.assertEqual(result.status_code, 200, (option, result.text))
+            project = result.json()
+            self.assertEqual(project["answers"]["industry"], [option])
 
     def test_agent_document_is_added_without_overwriting_or_advancing(self):
         project = self.ai_project()

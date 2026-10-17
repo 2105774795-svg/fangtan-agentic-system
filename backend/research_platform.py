@@ -12,7 +12,7 @@ import math
 import re
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
@@ -130,12 +130,7 @@ def _public(db, state):
     result["mode"] = state.get("mode", "demo")
     outline = next((a for a in reversed(state["artifacts"]) if a["step"] == 2 and a.get("kind") not in {"question_selection", "document"}), None)
     result["outline_questions"] = outline_questions(outline["content"]) if outline else []
-    result["interviews"] = [dict(row) for row in db.execute("""SELECT s.id,s.subject,s.status,s.outline,
-        (SELECT COUNT(*) FROM utterances u WHERE u.session_id=s.id) AS utterance_count,
-        EXISTS(SELECT 1 FROM reports r WHERE r.session_id=s.id) AS has_report
-        FROM sessions s WHERE s.project_id=? AND s.status!='deleting' ORDER BY s.created_at DESC""", (state["id"],)).fetchall()]
-    for item in result["interviews"]:
-        item["outline"] = json.loads(item["outline"] or "[]")
+    result["interviews"] = interview_inventory(db, state)
     result["job"] = None
     if state.get("job_id"):
         row = db.execute("""SELECT j.id,j.kind,j.output,j.error,t.status,t.stage,t.progress
@@ -145,6 +140,21 @@ def _public(db, state):
             if row["status"] == "failed" and not row["error"]:
                 result["job"]["error"] = "任务中断或执行时间超限，请重试"
     return result
+
+
+def interview_inventory(db, state):
+    items = [dict(row) for row in db.execute("""SELECT s.id,s.subject,s.status,s.outline,s.created_at,s.recording_state,
+        s.recorded_ms, (s.audio_path!='') AS has_audio,
+        (SELECT COUNT(*) FROM utterances u WHERE u.session_id=s.id) AS utterance_count,
+        EXISTS(SELECT 1 FROM reports r WHERE r.session_id=s.id) AS has_report
+        FROM sessions s WHERE s.project_id=? AND s.status!='deleting' ORDER BY s.created_at,s.id""", (state["id"],)).fetchall()]
+    for number, item in enumerate(items, 1):
+        item["outline"] = json.loads(item["outline"] or "[]")
+        item["number"] = number
+        item["synced"] = any(a.get("kind") == "material" and a.get("source_session") == item["id"] for a in state["artifacts"])
+        if item["status"] == "done":
+            item["recording_state"] = "ended"
+    return items
 
 
 def _active(db, state):
@@ -160,6 +170,10 @@ def _fingerprint(state):
 def _schedule(db, state, kind):
     if not config.KIMI_API_KEY:
         raise HTTPException(503, "请先在 backend/.env 配置 KIMI_API_KEY 并重启服务")
+    if kind in {"analysis", "report"}:
+        missing = [item for item in interview_inventory(db, state) if item["status"] == "done" and item["utterance_count"] and not item["synced"]]
+        if missing:
+            raise HTTPException(409, f"还有{len(missing)}场已结束访谈尚未同步，请到现场采集同步后再汇总")
     task_id, now = uuid.uuid4().hex, time.time()
     state["job_id"] = task_id
     payload = json.dumps({"project_id": state["id"], "job_id": task_id}, ensure_ascii=False)
@@ -173,6 +187,22 @@ def _schedule(db, state, kind):
 @router.get("/capabilities")
 def capabilities():
     return {"model_configured": bool(config.KIMI_API_KEY), "model": config.KIMI_MODEL, "transcription_configured": bool(config.DASHSCOPE_API_KEY)}
+
+
+@router.get("/projects/{project_id}/artifacts/{artifact_id}/export")
+def export_report(project_id: str, artifact_id: str):
+    from research_report import render_report
+    from urllib.parse import quote
+    with store.get() as db:
+        state = _read(db, project_id)
+    artifact = next((a for a in state["artifacts"] if a["id"] == artifact_id and a["step"] == 5), None)
+    if not artifact:
+        raise HTTPException(404, "没有可导出的汇总报告")
+    if artifact.get("stale"):
+        raise HTTPException(409, "原始材料已更新，请重新生成或审阅汇总报告后再导出")
+    return Response(render_report(state["title"] + "调研整合报告", artifact["content"]),
+                    media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition": "attachment; filename*=UTF-8''" + quote(state["title"] + "调研整合报告.docx")})
 
 
 @router.put("/projects/{project_id}/layout")
@@ -232,19 +262,26 @@ def _message(state, text, role="assistant"):
     state["messages"].append({"id": uuid.uuid4().hex, "role": role, "text": text, "at": time.time()})
 
 
-def known_industry(state):
+def _grounded_industries(state):
+    """Current model label plus original-prompt keyword matches, most specific first."""
     if state["scenario"] == "memoir":
-        return ""
+        return []
     prompt = state["prompt"]
     candidate = state.get("known_industry", "")
     candidates = [candidate] if isinstance(candidate, str) and 1 < len(candidate) <= 64 and candidate in prompt else []
     candidates += ["新能源汽车", "电动汽车", "汽车", "半导体", "消费电子", "餐饮", "制造业", "消费零售", "互联网科技", "文旅", "农业", "食品", "房地产", "医药", "教育", "金融", "便利店", "咖啡"]
-    for value in sorted(set(candidates), key=len, reverse=True):
+    matches = []
+    for value in sorted(set(candidates), key=lambda value: (-len(value), value)):
         for match in re.finditer(re.escape(value), prompt):
             prefix = prompt[max(0, match.start() - 8):match.start()]
             if not re.search(r"(?:不是|不做|不调研|不考虑|排除|不研究)[^，。；]*$", prefix):
-                return value
-    return ""
+                matches.append(value)
+                break
+    return matches
+
+
+def known_industry(state):
+    return next(iter(_grounded_industries(state)), "")
 
 
 def intake_fields(state):
@@ -343,6 +380,9 @@ def create_project(body: CreateProject):
 @router.get("/projects/{project_id}")
 def project(project_id: str):
     with store.get() as db:
+        # Keep snapshot revision, task status and interview list in one read view.
+        # Otherwise a just-finished task can be paired with the previous revision.
+        db.execute("BEGIN")
         return _public(db, _read(db, project_id))
 
 
@@ -411,6 +451,11 @@ def command(project_id: str, body: Command):
             custom_answers = {}
             for field in fields:
                 selected = answers.get(field["key"], [])
+                # The first snapshot can resolve a broad keyword before the model
+                # refines it. Accept only grounded single-value aliases and store
+                # the current canonical label; unrelated/multiple values stay invalid.
+                if field["key"] == "industry" and industry and len(selected) == 1 and selected[0] in _grounded_industries(state):
+                    selected = [industry]
                 custom = body.custom_answers.get(field["key"], "").strip()
                 if "其他" in selected:
                     if not field["allow_custom"] or not custom or len(custom) > 160 or any(ord(char) < 32 for char in custom):
@@ -422,7 +467,7 @@ def command(project_id: str, body: Command):
                 if previous_custom and previous_custom in selected:
                     custom_answers[field["key"]] = previous_custom
                 if len(selected) != len(set(selected)) or any(value not in allowed for value in selected) or (not field["multiple"] and len(selected) > 1):
-                    raise HTTPException(422, "选择项不合法")
+                    raise HTTPException(422, f"「{field['label']}」选择项不合法，请重新选择")
                 answers[field["key"]] = selected
                 if body.action == "brief" and not selected:
                     raise HTTPException(422, "请先补齐调研方向的选择")
@@ -486,6 +531,10 @@ def command(project_id: str, body: Command):
                 _message(state, "已进入采集准备，提纲与准备清单会保存在这个项目里。第一轮先完成平台骨架，录音、手机接续与真实材料分析尚未接入。你可以继续编辑或导出当前成果。")
             else:
                 raise HTTPException(409, "当前阶段暂无可自动执行的下一步")
+        elif body.action == "select_interview":
+            if not db.execute("SELECT 1 FROM sessions WHERE id=? AND project_id=? AND status!='deleting'", (body.session_id, project_id)).fetchone():
+                raise HTTPException(404, "本项目中没有这场访谈")
+            state["active_session_id"] = body.session_id
         elif body.action == "start_interview":
             outline = next((a for a in reversed(state["artifacts"]) if a["step"] == 2 and a.get("kind") not in {"question_selection", "document"}), None)
             if not ai or state["stage"] < 2 or not outline or outline.get("stale"):
@@ -516,13 +565,16 @@ def command(project_id: str, body: Command):
                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (sid, state["title"][:80], spec["name"], itype, industry,
                     "、".join(state["answers"].get("goal", []))[:500], "本地使用者", json.dumps(choices, ensure_ascii=False),
                     "live", time.time(), "user", LOCAL_OWNER, json.dumps(state.get("location", {}), ensure_ascii=False), project_id, state["title"][:80]))
+                number = db.execute("SELECT COUNT(*) FROM sessions WHERE project_id=? AND status!='deleting'", (project_id,)).fetchone()[0]
+                label = body.title.strip()[:80] or f"第{number}场访谈"
+                db.execute("UPDATE sessions SET subject=? WHERE id=?", (label, sid))
                 db.execute("INSERT INTO suggestions(session_id,kind,payload,created_at) VALUES(?,?,?,?)",
                            (sid, "playbook", json.dumps(playbook.opening_payload(itype), ensure_ascii=False), time.time()))
                 _artifact(state, 2, "本场访谈问题清单", "# 本场访谈问题\n\n" + "\n".join("- " + q for q in choices),
                           origin="user", kind="question_selection", source_session=sid, outline_version=outline["version"])
                 _message(state, f"已确认本场 {len(choices)} 个问题，现场录音页已准备好。也可以导入已有录音或文字稿。")
                 state["messages"][-1]["step"] = 3
-            state.update(active_session_id=sid, stage=max(3, state["stage"]))
+            state.update(active_session_id=sid, stage=max(3, state["stage"]), completed=False)
         elif body.action == "sync_session":
             session = db.execute("SELECT * FROM sessions WHERE id=? AND project_id=? AND status!='deleting'", (body.session_id, project_id)).fetchone()
             if not ai or not session:
@@ -575,6 +627,16 @@ def command(project_id: str, body: Command):
                     item["stale"] = True
             state["completed"] = False
             _message(state, "原始材料已保存。它将作为分析和报告的事实来源，引用会定位到材料段落。")
+        elif body.action == "regenerate_report":
+            if not ai or state["stage"] < 4 or not any(a.get("kind") == "material" for a in state["artifacts"]):
+                raise HTTPException(409, "请先完成原始材料分析")
+            if not any(a["step"] == 4 and not a.get("stale") and a.get("kind") != "document" for a in state["artifacts"]):
+                raise HTTPException(409, "原始材料有更新，请先重新分析后再汇总")
+            state.update(stage=5, completed=False)
+            for item in state["artifacts"]:
+                if item["step"] == 5:
+                    item["stale"] = True
+            _schedule(db, state, "report")
         elif body.action == "regenerate":
             if not ai or state["stage"] < 4 or not any(a.get("kind") == "material" for a in state["artifacts"]):
                 raise HTTPException(409, "请先添加原始材料")
@@ -624,6 +686,7 @@ def execute_ai_job(payload, ctx):
     init()
     with store.get() as db:
         state = _read(db, project_id)
+        state["interview_inventory"] = interview_inventory(db, state)
         job = dict(db.execute("SELECT * FROM research_workspace_jobs WHERE id=? AND project_id=?", (job_id, project_id)).fetchone())
     if state.get("job_id") != job_id:
         raise ValueError("任务已被替代")

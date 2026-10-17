@@ -64,6 +64,11 @@ def init():
             db.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT")
         if "audio_path" not in session_cols:
             db.execute("ALTER TABLE sessions ADD COLUMN audio_path TEXT DEFAULT ''")
+        if "recording_state" not in session_cols:
+            db.execute("ALTER TABLE sessions ADD COLUMN recording_state TEXT DEFAULT 'ready'")
+        if "recorded_ms" not in session_cols:
+            db.execute("ALTER TABLE sessions ADD COLUMN recorded_ms INTEGER DEFAULT 0")
+            db.execute("UPDATE sessions SET recorded_ms=COALESCE((SELECT MAX(end_ms) FROM utterances WHERE session_id=sessions.id),0)")
         if "speaker_consented_at" not in session_cols:
             db.execute("ALTER TABLE sessions ADD COLUMN speaker_consented_at REAL")
         if "speaker_job_id" not in session_cols:
@@ -363,7 +368,7 @@ def recent_suggestion_time(sid):
 
 def finish_session(sid):
     with get() as db:
-        db.execute("UPDATE sessions SET status='done', finished_at=COALESCE(finished_at, ?) WHERE id=?",
+        db.execute("UPDATE sessions SET status='done', recording_state='ended', finished_at=COALESCE(finished_at, ?) WHERE id=?",
                    (time.time(), sid))
 
 

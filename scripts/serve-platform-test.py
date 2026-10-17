@@ -31,7 +31,7 @@ def model_fixture(kind, state, ctx, on_text):
             ctx.check_cancelled()
             on_text(reply[start:start + 3])
             time.sleep(.2)
-        return {"intake": {"scenario": "market", "title": "上海新能源汽车市场调研" if "新能源汽车" in state["prompt"] else "锦州调研 · 隔离验收", "reply": reply, "location": {"city": "上海" if "新能源汽车" in state["prompt"] else "锦州", "market": ""}}}
+        return {"intake": {"industry": "精品咖啡" if "精品咖啡" in state["prompt"] else "", "scenario": "market", "title": "上海新能源汽车市场调研" if "新能源汽车" in state["prompt"] else "锦州调研 · 隔离验收", "reply": reply, "location": {"city": "上海" if "新能源汽车" in state["prompt"] else "锦州", "market": ""}}}
     if kind == "chat" and "新加文档" in state["messages"][-1]["text"]:
         content = "# 访谈行程安排\n\n建议安排两场访谈，具体时间待确认。"
         for part in (content[:10], content[10:]):
@@ -45,7 +45,15 @@ def model_fixture(kind, state, ctx, on_text):
     if kind == "outline":
         content += "\n- 您经营多久了？\n- 最近顾客有哪些变化？\n- 可以举一个亲历的例子吗？"
     if kind in {"analysis", "report"}:
-        content += "\n\n材料中的受访者提出延长营业时间的建议 [M1-P1]。"
+        materials = [a for a in state['artifacts'] if a.get('kind') == 'material']
+        content += '\n\n' + '\n'.join(f"材料{i+1}中的原文待结合上下文核实 [M{i+1}-P1]。" for i, a in enumerate(materials))
+    if kind == "report":
+        content = "# 多场访谈调研整合报告\n\n报告性质：内部工作讨论稿\n资料范围：以已同步原文为准，访谈场次不等于独立受访人数。\n\n## 执行摘要\n仅依据合成材料整理，不作为真实调查事实。\n\n"
+        content += '\n\n'.join('## ' + heading + '\n' + '待结合材料核实。' for heading in ['一 研究范围与判读方法', '二 受访对象现状与需求归纳', '三 需求整合清单'])
+        content += '\n\n| 需求 | 来源 | 核实状态 |\n| --- | --- | --- |\n| 营业时间建议 | [M1-P1] | 待核实 |\n\n## 四 逐场访谈与实地记录\n'
+        content += '\n'.join(f"### 材料{i+1} {a['title']}\n{a['content'].splitlines()[0]} [M{i+1}-P1]" for i,a in enumerate(materials))
+        content += '\n\n## 五 需要进一步补充的数据\n独立受访人数待核对。\n\n## 六 关键分歧与研究风险\n合成测试资料，不能外推。\n\n## 材料索引与来源\n'
+        content += '\n'.join(f"- M{i+1}：{a['title']} [M{i+1}-P1]" for i,a in enumerate(materials))
     for start in range(0, len(content), 8):
         ctx.check_cancelled()
         on_text(content[start:start + 8])
@@ -81,7 +89,7 @@ if __name__ == "__main__":
         thread = threading.Thread(target=work, daemon=True)
         thread.start()
         try:
-            uvicorn.run(app.app, host="127.0.0.1", port=18998)
+            uvicorn.run(app.app, host="127.0.0.1", port=int(os.environ.get("PLATFORM_TEST_PORT", "18998")))
         finally:
             stop.set()
             thread.join(timeout=5)
