@@ -11,6 +11,36 @@ import platform_ai
 
 
 class PlatformModelTests(unittest.TestCase):
+    def test_research_analysis_preserves_evidence_and_distinguishes_hypotheses(self):
+        class Context:
+            def progress(self, *args): pass
+        for scene in ['market', 'enterprise']:
+            state = {'prompt': '研究需求', 'scenario': scene, 'answers': {}, 'context': '', 'messages': [],
+                     'artifacts': [{'id': 'material', 'kind': 'material', 'title': '合成访谈', 'content': '我上周把记录复制到表格里。'}]}
+            def generated(messages, on_text, **kwargs):
+                instructions = messages[0]['content']
+                self.assertIn('待验证假设', instructions)
+                self.assertIn('不能直接写成普遍需求或已验证结论', instructions)
+                self.assertIn('每个实质判断保留原文引用', instructions)
+                material = json.loads(messages[1]['content'])
+                self.assertEqual(material['原始材料'][0]['paragraphs'][0]['ref'], 'M1-P1')
+                return '研究发现：存在手动整理记录的行为 [M1-P1]。需求机会待进一步验证。'
+            with patch('platform_ai.stream', side_effect=generated):
+                result = platform_ai.generate('analysis', state, Context(), lambda _: None)
+            self.assertEqual(result['source_ids'], ['material'])
+
+    def test_memoir_keeps_story_language_instead_of_product_demand_framework(self):
+        class Context:
+            def progress(self, *args): pass
+        state = {'prompt': '讲述故乡', 'scenario': 'memoir', 'answers': {}, 'context': '', 'messages': [], 'artifacts': []}
+        def generated(messages, on_text, **kwargs):
+            self.assertIn('尊重记忆不确定性的开放问题', messages[0]['content'])
+            self.assertNotIn('目标人群与招募标准', messages[0]['content'])
+            self.assertNotIn(platform_ai.RESEARCH_LANGUAGE, messages[0]['content'])
+            return '- 您记忆中的故乡是什么样的？'
+        with patch('platform_ai.stream', side_effect=generated):
+            platform_ai.generate('outline', state, Context(), lambda _: None)
+
     def test_integrated_report_uses_template_and_both_interview_sources(self):
         state = {"prompt": "合成市场调研", "scenario": "market", "answers": {}, "context": "", "messages": [],
                  "interview_inventory": [{"id": "one", "subject": "张店主初访", "number": 1}, {"id": "two", "subject": "张店主补访", "number": 2}],

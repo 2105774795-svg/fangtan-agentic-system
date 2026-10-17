@@ -16,8 +16,10 @@
     "dev:platform": "npm --prefix frontend run dev",
     "build:platform": "npm --prefix frontend run build",
     "test:platform": "node scripts/test-platform.cjs",
-    "test:interview": "node scripts/test-interview-prep.cjs",
-    "test:interview:advanced": "node scripts/test-interview-advanced.cjs"
+    "test:interview": "node scripts/test-interview-workspace.cjs",
+    "test:interview:advanced": "node scripts/test-interview-workspace.cjs",
+    "test:interview:workspace": "node scripts/test-interview-workspace.cjs",
+    "test:conversation:auto": "node scripts/test-auto-conversation.cjs"
   },
   "devDependencies": {
     "fake-indexeddb": "6.2.5",

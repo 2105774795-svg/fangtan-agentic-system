@@ -11,16 +11,16 @@ const base = process.env.PLATFORM_TEST_URL || 'http://127.0.0.1:18999';
     page.on('pageerror', error => errors.push(error.message));
     async function create(prompt) {
       await page.goto(base);
-      await page.getByLabel('今天您想调研什么？').fill(prompt);
-      await page.getByRole('button', { name: '开始调研', exact: true }).click();
+      await page.getByLabel('这次想研究什么问题？').fill(prompt);
+      await page.getByRole('button', { name: '创建研究项目', exact: true }).click();
       await page.locator('.briefing-card').waitFor();
     }
     async function submit(industry) {
       const request = page.waitForRequest(request => request.method() === 'POST'
         && request.url().includes('/commands') && request.postDataJSON()?.action === 'brief');
-      await page.getByRole('button', { name: '确认需求，生成计划', exact: true }).click();
+      await page.getByRole('button', { name: '确认目标，生成研究方案', exact: true }).click();
       assert.deepEqual((await request).postDataJSON().answers.industry, [industry]);
-      await page.getByRole('button', { name: '确认计划，生成提纲', exact: true }).waitFor();
+      await page.getByRole('button', { name: '审阅方案，生成访谈提纲', exact: true }).waitFor();
     }
     await create('想调研锦州精品咖啡市场');
     assert.ok((await page.locator('.resolved-context').textContent()).includes('精品咖啡'));

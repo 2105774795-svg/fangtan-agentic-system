@@ -1,6 +1,7 @@
 import { type CSSProperties, memo, useEffect, useMemo, useRef, useState } from 'react';
 import { Background, Handle, MarkerType, MiniMap, Panel, Position, ReactFlow, ReactFlowProvider, useNodesState, useNodesInitialized, useReactFlow, useOnViewportChange, type Edge, type Node, type NodeProps } from '@xyflow/react';
 import { ArrowsOut, ArrowUpRight, BookOpen, ChartBar, CheckCircle, CirclesThree, Crosshair, FileText, FolderSimple, FlowArrow, ListBullets, MagnifyingGlass, MapTrifold, Microphone, Minus, Plus } from '@phosphor-icons/react';
+import { sceneRegistry } from './sceneRegistry';
 import { visibleSteps, type Artifact, type Layout, type Project, type Scenario } from './types';
 
 const tones = ['ochre', 'blue', 'green', 'violet', 'coral', 'rose'];
@@ -9,7 +10,7 @@ const icons = [FileText, MagnifyingGlass, ListBullets, Microphone, ChartBar, Fol
 type BranchData = {
   title: string; index: number; state: 'done' | 'active' | 'pending';
   artifacts: Artifact[]; questions: { label: string; value: string }[]; selected: boolean;
-  onOpen: (id: string) => void;
+  onOpen: (id: string) => void; emptyText?: string;
 };
 type RootData = { title: string; subtitle: string; count: number; scene: string };
 type Branch = Node<BranchData, 'branch'>;
@@ -23,7 +24,7 @@ const BranchCard = memo(function BranchCard({ data }: NodeProps<Branch>) {
     <div className="branch-content">
       {data.artifacts.map(a => <button key={a.id} aria-label={a.title} className="branch-file nodrag nopan" onClick={event => { event.stopPropagation(); data.onOpen(a.id); }}><span className="branch-file-icon"><FileText size={15}/></span><span title={a.title}>{a.title.replace(' · 示例草稿', '')}</span><small className={a.stale ? 'needs-review' : ''}>{a.stale ? '复核' : `v${a.version}`}</small></button>)}
       {data.questions.map(question => <div key={question.label} className="branch-question"><span>{question.label}</span><small>{question.value || '待选择'}</small></div>)}
-      {!data.artifacts.length && !data.questions.length && <p className="branch-empty">等待现场录音或导入材料</p>}
+      {!data.artifacts.length && !data.questions.length && <p className="branch-empty">{data.emptyText || '等待现场录音或导入材料'}</p>}
     </div>
     <footer><span>{data.artifacts.length ? `${data.artifacts.length} 份成果` : '尚无成果'}</span><span>{data.state === 'active' ? '进行中' : data.state === 'done' ? '已确认' : '待开始'}<ArrowUpRight size={11}/></span></footer>
   </section>;
@@ -62,8 +63,8 @@ function MapSurface({ project, current, selectedStep, onSelect, onOpen, onTasks,
     let y = 210;
     const branches = steps.map((index): Branch => {
       const artifacts = project.artifacts.filter(a => a.step === index);
-      const questions = index === 0 && !artifacts.length ? (project.checklist || current.fields).map(field => ({ label: field.label, value: (project.answers[field.key] || []).map(value => value === '其他' ? project.custom_answers?.[field.key]?.trim() || '其他（待补充）' : value).join('、') || field.resolved_value || '' })) : [];
-      const node: Branch = { id: String(index), type: 'branch', position: { x: 20, y }, initialWidth: 260, initialHeight: 106 + Math.max(1, artifacts.length + questions.length) * 47, draggable: true, dragHandle: '.branch-drag-handle', data: { title: current.steps[index], index, state: index < project.stage || project.completed ? 'done' : 'active', artifacts, questions, selected: selectedStep === index, onOpen } };
+      const questions = project.scenario === 'interview' && index === 0 ? [{ label: '面试目标', value: project.prompt }] : index === 0 && !artifacts.length ? (project.checklist || current.fields).map(field => ({ label: field.label, value: (project.answers[field.key] || []).map(value => value === '其他' ? project.custom_answers?.[field.key]?.trim() || '其他（待补充）' : value).join('、') || field.resolved_value || '' })) : [];
+      const node: Branch = { id: String(index), type: 'branch', position: { x: 20, y }, initialWidth: 260, initialHeight: 106 + Math.max(1, artifacts.length + questions.length) * 47, draggable: true, dragHandle: '.branch-drag-handle', data: { title: current.steps[index], index, state: index < project.stage || project.completed ? 'done' : 'active', artifacts, questions, selected: selectedStep === index, onOpen, emptyText: project.scenario === 'interview' ? ['确认本次准备目标', '补充真实材料，或先继续准备', '生成问题与准备策略', '开始一场录音练习', '结束练习后复盘与重练', '审阅后归档成果'][index] : undefined } };
       y += (node.initialHeight || 160) + 82;
       return node;
     });
@@ -88,7 +89,7 @@ function MapSurface({ project, current, selectedStep, onSelect, onOpen, onTasks,
   const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
   return <div className="research-map" data-testid="research-map"><ReactFlow nodes={nodes} onNodesChange={onNodesChange} onNodeDragStart={(_, node) => { dragging.current = node.id; moved.current.add(node.id); }} onNodeDragStop={(_, node) => { dragging.current = null; onLayout({ [node.id]: node.position }); }} edges={edges} nodeTypes={nodeTypes} onNodeClick={(_, node) => { if (node.type === 'branch') onSelect(Number(node.id)); }} minZoom={.2} maxZoom={1.6} nodesConnectable={false} panOnScroll zoomOnDoubleClick={false} aria-label="调研流程画布">
     <Background color="var(--studio-dot)" gap={22} size={1}/>
-    <Panel position="top-left" className="map-top-status"><span className="map-mode"><CirclesThree size={15}/>调研地图</span><span className="map-mode-divider"/><span>{current.steps[project.stage]}</span><span className="mode-state">{project.mode === 'ai' ? 'AI 工作流' : '历史示例'}</span></Panel>
+    <Panel position="top-left" className="map-top-status"><span className="map-mode"><CirclesThree size={15}/>{sceneRegistry[project.scenario].mapLabel}</span><span className="map-mode-divider"/><span>{current.steps[project.stage]}</span><span className="mode-state">{project.mode === 'ai' ? 'AI 工作流' : '历史示例'}</span></Panel>
     <MapControls activeId={steps.length ? String(steps[steps.length - 1]) : 'project'} onTasks={onTasks} onArrange={() => { const positions = Object.fromEntries(generated.map(node => [node.id, node.position])); setNodes(previous => previous.map(node => ({ ...node, position: positions[node.id] }))); onLayout(positions); requestAnimationFrame(() => void instance.fitView({ nodes: steps.slice(-2).map(index => ({ id: String(index) })), padding: .24, maxZoom: 1, duration: 240 })); }}/>
   </ReactFlow><span className="map-bottom-hint">{reduced ? '点击文件查看成果' : '拖动画布探索 · 点击文件查看成果'}</span></div>;
 }

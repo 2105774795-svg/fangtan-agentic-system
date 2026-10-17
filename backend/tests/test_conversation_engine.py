@@ -41,8 +41,8 @@ class ConversationTests(unittest.TestCase):
         def stream(messages, callback, **kwargs):
             callback(text[:5]); callback(text[5:])
             return text
-        with patch('conversation_engine.platform_ai.stream', side_effect=stream):
-            worker.run_once(handlers=engine.HANDLERS, worker_id='conversation-fixture')
+        with patch('conversation_engine.platform_ai.stream', side_effect=stream), patch('agents.model.complete', return_value={'role': 'assistant', 'content': text}):
+            worker.run_once(handlers={'conversation_reply': engine.reply_job}, worker_id='conversation-fixture')
 
     def archive_model(self, system, block):
         evidence = [{'turn_id': block[0]['turn_id'], 'quote': block[0]['text']}]
@@ -72,7 +72,7 @@ class ConversationTests(unittest.TestCase):
 
     def test_failed_reply_keeps_human_turn_and_retry_has_no_duplicates(self):
         self.send('小时候母亲带我赶集。')
-        with patch('conversation_engine.platform_ai.stream', side_effect=RuntimeError('private cloud message')):
+        with patch('agents.model.complete', side_effect=RuntimeError('private cloud message')):
             worker.run_once(handlers=engine.HANDLERS)
         value = self.client.get(self.url).json()
         self.assertNotIn('private cloud', json.dumps(value))

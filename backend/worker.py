@@ -18,7 +18,7 @@ import store
 logger = logging.getLogger("fangtan.worker")
 
 
-class WorkerStopping(RuntimeError):
+class WorkerStopping(job_queue.TaskUnavailable):
     pass
 
 
@@ -137,7 +137,7 @@ def run_once(*, handlers=None, on_cancel=None, on_success=None, worker_id=None,
         logger.info("退出前已释放任务 task=%s", task["id"])
     except Exception as exc:
         # 不输出 payload（可能包含逐字稿）或云端鉴权信息。
-        job_queue.fail(task["id"], task["lease_owner"], str(exc))
+        job_queue.fail(task["id"], task["lease_owner"], str(exc), retryable=getattr(exc, 'retryable', True))
         logger.warning("任务执行失败 task=%s kind=%s error_type=%s",
                        task["id"], task["kind"], type(exc).__name__)
     return True
@@ -150,6 +150,7 @@ def main(argv=None):
     parser.add_argument("--lease-seconds", type=float, default=60, help="处理租约时长，默认 60 秒")
     parser.add_argument("--interview-only", action="store_true", help="Only process interview preparation tasks")
     parser.add_argument("--worker-id", default="", help="可选的处理进程标识")
+    parser.add_argument("--exclude-kind", action="append", default=[], help="排除任务类型，可重复；使用即时对谈进程时可排除 conversation_reply")
     args = parser.parse_args(argv)
     if args.poll_seconds <= 0 or args.lease_seconds <= 0:
         parser.error("轮询间隔与租约时长必须大于 0")
@@ -169,6 +170,9 @@ def main(argv=None):
     handlers, on_cancel, on_success = _handlers()
     if args.interview_only:
         handlers = {key: value for key, value in handlers.items() if key.startswith("interview_")}
+    handlers = {kind: handler for kind, handler in handlers.items() if kind not in args.exclude_kind}
+    if not handlers:
+        parser.error("至少需要保留一种任务类型")
     while not stop_event.is_set():
         worked = run_once(handlers=handlers, on_cancel=on_cancel, on_success=on_success,
                           worker_id=args.worker_id or None,

@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="1190" viewBox="0 0 1280 1190" role="img" aria-labelledby="title desc">
+  <title id="title">体察 Agentic 系统当前项目架构</title>
+  <desc id="desc">新版 React 工作台、旧版网页及鸿蒙源码通过 FastAPI 接入。FastAPI 与独立 Python Worker 共用 SQLite 业务表与任务队列及本地数据目录，按需调用 Kimi、DashScope 和外部员工中心。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+    <style>
+      text { font-family: 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif; fill: #172b44; }
+      .title { font-size: 32px; font-weight: 700; }
+      .subtitle { font-size: 17px; fill: #52657b; }
+      .layer { font-size: 16px; font-weight: 700; fill: #52657b; letter-spacing: 2px; }
+      .heading { font-size: 22px; font-weight: 700; }
+      .body { font-size: 18px; }
+      .small { font-size: 16px; fill: #52657b; }
+      .mono { font-family: Consolas, 'Microsoft YaHei', monospace; font-size: 17px; }
+      .node { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1.5; }
+      .edge { fill: none; stroke: #64748b; stroke-width: 2; marker-end: url(#arrow); stroke-linejoin: round; }
+      .edge-label { font-size: 16px; fill: #52657b; paint-order: stroke; stroke: #f6f8fc; stroke-width: 7; stroke-linejoin: round; }
+    </style>
+  </defs>
+  <rect width="1280" height="1190" fill="#f6f8fc"/>
+  <rect x="40" y="36" width="6" height="62" rx="3" fill="#2766c9"/>
+  <text x="64" y="64" class="title">体察 Agentic 系统 · 当前架构</text>
+  <text x="64" y="95" class="subtitle">代码快照：main · 8abfa9f · 2026-10-17　｜　模块化单体 API + 独立任务进程</text>
+
+  <text x="40" y="135" class="layer">客户端</text>
+  <rect x="40" y="154" width="380" height="116" rx="12" class="node"/>
+  <text x="62" y="189" class="heading">新版「体察」工作台</text>
+  <text x="62" y="220" class="body">React / TypeScript / Vite / React Flow</text>
+  <text x="62" y="248" class="small">frontend/ · 项目、对话、画布、成果、采集</text>
+
+  <rect x="450" y="154" width="380" height="116" rx="12" class="node"/>
+  <text x="472" y="189" class="heading">旧版「汇言笔 / 时叙录」</text>
+  <text x="472" y="220" class="body">原生 HTML / CSS / JavaScript</text>
+  <text x="472" y="248" class="small">backend/static/ · /legacy 入口</text>
+
+  <rect x="860" y="154" width="380" height="116" rx="12" class="node"/>
+  <text x="882" y="189" class="heading">可选鸿蒙客户端源码</text>
+  <text x="882" y="220" class="body">ArkWeb + AudioCapturer + WAV 队列</text>
+  <text x="882" y="248" class="small">原生录音桥接旧页面 · 尚未签名 / 真机验收</text>
+
+  <path d="M230 270 V334" class="edge"/>
+  <path d="M640 270 V334" class="edge"/>
+  <path d="M1050 270 V334" class="edge"/>
+  <text x="160" y="309" class="edge-label">REST / 快照 SSE</text>
+  <text x="571" y="309" class="edge-label">REST / 访谈 SSE</text>
+  <text x="982" y="309" class="edge-label">HTTP / 原生分片</text>
+
+  <rect x="40" y="336" width="1200" height="228" rx="14" fill="#edf4ff" stroke="#8eb1e4" stroke-width="1.5"/>
+  <text x="62" y="375" class="heading">进程 ①　FastAPI / Uvicorn（单 API worker）</text>
+  <rect x="62" y="396" width="366" height="108" rx="9" fill="#fff"/>
+  <text x="80" y="427" class="heading">调研工作台</text>
+  <text x="80" y="455" class="mono">research_platform.py</text>
+  <text x="80" y="484" class="small">/api/platform · 状态机 / 文档 / 快照 SSE</text>
+  <rect x="457" y="396" width="366" height="108" rx="9" fill="#fff"/>
+  <text x="475" y="427" class="heading">通用访谈与采集</text>
+  <text x="475" y="455" class="mono">app.py + task_api.py</text>
+  <text x="475" y="484" class="small">录音 / 导入 / 项目 / 纪要 / 导出</text>
+  <rect x="852" y="396" width="366" height="108" rx="9" fill="#fff"/>
+  <text x="870" y="427" class="heading">私密口述史「时叙录」</text>
+  <text x="870" y="455" class="mono">memoir/api.py + auth.py</text>
+  <text x="870" y="484" class="small">/api/memoir · 独立 Cookie 与所有权校验</text>
+  <text x="62" y="540" class="body">实时转写：API 线程池　｜　追问 / 自动命名：API 内线程　｜　长任务：持久队列</text>
+
+  <path d="M300 564 V650" class="edge"/>
+  <text x="319" y="613" class="edge-label">业务状态 / 任务提交 / 结果读取</text>
+
+  <rect x="40" y="650" width="520" height="196" rx="12" fill="#eaf7f2" stroke="#85bba6" stroke-width="1.5"/>
+  <text x="62" y="687" class="heading">同一个 SQLite 数据库</text>
+  <text x="62" y="717" class="mono">data/fangtan.db</text>
+  <text x="62" y="750" class="body">projects / sessions / utterances / reports</text>
+  <text x="62" y="780" class="body">research_workspace_* / memoir_*</text>
+  <text x="62" y="820" class="heading">tasks：持久任务表（租约 / 心跳 / 重试）</text>
+
+  <rect x="750" y="650" width="490" height="196" rx="12" fill="#fff6e9" stroke="#d9b574" stroke-width="1.5"/>
+  <text x="772" y="687" class="heading">进程 ②　独立 Python Worker</text>
+  <text x="772" y="717" class="mono">worker.py → task_handlers.py</text>
+  <text x="772" y="753" class="body">平台 AI / 导入 / 纪要 / 项目综合 / 问透</text>
+  <text x="772" y="783" class="body">私密口述史记忆提取与章节生成</text>
+  <text x="772" y="820" class="small">不监听端口 · 通过数据库领取任务</text>
+
+  <path d="M560 726 H750" class="edge"/>
+  <text x="604" y="709" class="edge-label">领取 tasks</text>
+  <path d="M750 792 H560" class="edge"/>
+  <text x="588" y="775" class="edge-label">回写进度 / 成果</text>
+
+  <path d="M40 490 H20 V1006 H40" class="edge"/>
+  <path d="M850 846 V901 H300 V940" class="edge"/>
+  <text x="338" y="892" class="edge-label">API 与 Worker 共用本地文件目录</text>
+  <path d="M995 846 V940" class="edge"/>
+  <text x="1014" y="899" class="edge-label">模型 / 转写 / 检索</text>
+  <path d="M1240 490 H1260 V1006 H1240" class="edge"/>
+
+  <rect x="40" y="940" width="520" height="150" rx="12" class="node"/>
+  <text x="62" y="977" class="heading">本地文件存储 · data/</text>
+  <text x="62" y="1010" class="body">uploads/ · recordings/ · reports/</text>
+  <text x="62" y="1041" class="body">memoir-private/recordings/：私密原音</text>
+  <text x="62" y="1071" class="small">FFmpeg 在本机预处理；源码不含真实资料和密钥</text>
+
+  <rect x="750" y="940" width="490" height="150" rx="12" class="node"/>
+  <text x="772" y="977" class="heading">外部依赖（按功能调用）</text>
+  <text x="772" y="1010" class="body">Kimi：生成 / 流式文本 / 公开检索</text>
+  <text x="772" y="1041" class="body">DashScope：云端音频转写</text>
+  <text x="772" y="1071" class="small">API 另对接员工中心；其实现不在本仓库</text>
+
+  <text x="40" y="1131" class="small">入口：新版构建产物存在时 / 显示新工作台；否则回退旧版。/legacy 始终为旧版。</text>
+  <text x="40" y="1162" class="small">边界：新版口述史场景与私密时叙录分开；新版录音轮询会话。权限配置与代码依据见同目录架构说明。</text>
+</svg>

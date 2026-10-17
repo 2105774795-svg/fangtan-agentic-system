@@ -11,36 +11,51 @@ import hashlib
 import math
 import re
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, Response
 from starlette.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 import store
 import config
 import job_queue
 import playbook
+import employee_auth
 
-router = APIRouter(prefix="/api/platform", tags=["research-platform"])
+
+async def workspace_access(request: Request):
+    if not config.AUTH_ENABLED:
+        return
+    user = getattr(request.state, "user", None) or await employee_auth.current_user(request)
+    request.state.user = user
+    pid = request.path_params.get("project_id")
+    if pid:
+        with store.get() as db:
+            row = db.execute("SELECT owner_id FROM projects WHERE id=?", (pid,)).fetchone()
+            if not row or row["owner_id"] != user["id"]:
+                raise HTTPException(404, "项目不存在或无权访问")
+
+
+router = APIRouter(prefix="/api/platform", tags=["research-platform"], dependencies=[Depends(workspace_access)])
 LOCAL_OWNER = -1
 
 SCENARIOS = {
     "market": {
-        "name": "市场调研", "description": "走进市场，看见真实需求", "noun": "调研",
-        "steps": ["需求确认", "背景与计划", "调研提纲", "现场采集", "综合分析", "成果归档"],
+        "name": "用户与市场调研", "description": "理解使用场景，发现需求机会", "noun": "调研",
+        "steps": ["定义调研目标", "研究背景与方案", "访谈提纲", "开展访谈", "洞察分析", "研究成果"],
         "fields": [
             {"key": "industry", "label": "关注哪个行业？", "options": ["综合 / 暂不限定", "消费零售", "制造业", "文旅服务", "农业与食品", "互联网科技"], "multiple": False},
-            {"key": "goal", "label": "这次调研希望了解什么？", "options": ["了解市场现状", "发现经营问题", "寻找增长机会", "比较区域差异", "验证一个想法"], "multiple": True},
-            {"key": "audience", "label": "准备和谁聊一聊？", "options": ["商户 / 店主", "消费者", "企业负责人", "行业专家", "园区 / 协会人员"], "multiple": True},
+            {"key": "goal", "label": "本次调研聚焦哪些研究问题？", "options": ["理解使用场景", "识别用户痛点", "探索需求机会", "验证研究假设", "了解市场现状", "发现经营问题", "寻找增长机会", "比较区域差异", "验证一个想法"], "multiple": True},
+            {"key": "audience", "label": "本次计划访谈哪些目标人群？", "options": ["商户 / 店主", "消费者", "企业负责人", "行业专家", "园区 / 协会人员"], "multiple": True},
         ],
     },
     "enterprise": {
         "name": "企业访谈", "description": "通过对话，理解一家企业", "noun": "访谈",
-        "steps": ["访谈目标", "企业背景", "访谈提纲", "访谈采集", "纪要与洞察", "成果归档"],
+        "steps": ["定义调研目标", "研究背景与方案", "访谈提纲", "开展访谈", "洞察分析", "研究成果"],
         "fields": [
             {"key": "industry", "label": "企业属于哪个行业？", "options": ["综合 / 暂不限定", "制造业", "消费零售", "互联网科技", "专业服务", "能源与环保"], "multiple": False},
-            {"key": "goal", "label": "最想理解企业的哪些方面？", "options": ["业务与商业模式", "经营挑战", "组织与人才", "数字化转型", "发展战略"], "multiple": True},
-            {"key": "audience", "label": "这次主要访谈谁？", "options": ["创始人 / 企业家", "企业高管", "业务负责人", "一线员工", "合作伙伴"], "multiple": True},
+            {"key": "goal", "label": "本次调研聚焦哪些业务问题？", "options": ["理解业务流程", "识别业务痛点", "验证需求假设", "业务与商业模式", "经营挑战", "组织与人才", "数字化转型", "发展战略"], "multiple": True},
+            {"key": "audience", "label": "本次计划访谈哪些业务角色？", "options": ["创始人 / 企业家", "企业高管", "业务负责人", "一线员工", "合作伙伴"], "multiple": True},
         ],
     },
     "memoir": {
@@ -53,6 +68,8 @@ SCENARIOS = {
         ],
     },
 }
+from interview_prep.workspace import SCENARIO as INTERVIEW_SCENARIO
+SCENARIOS['interview'] = INTERVIEW_SCENARIO
 
 
 def init():
@@ -82,6 +99,7 @@ class CreateProject(BaseModel):
     request_id: str = Field(min_length=8, max_length=80)
     mode: str = "ai"
     source_project_id: str | None = None
+    interview_config: dict | None = None
 
 
 class Command(BaseModel):
@@ -100,6 +118,8 @@ class Command(BaseModel):
     session_id: str | None = None
     request_id: str = Field(default="", max_length=80)
     selected_step: int | None = Field(default=None, ge=0, le=5)
+    scene_command: dict | None = None
+    chat_task_id: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class Layout(BaseModel):
@@ -116,6 +136,9 @@ def _save(db, state):
 
 
 def _public(db, state):
+    if state['scenario'] == 'interview':
+        from interview_prep import workspace
+        return workspace.public(db, state)
     layout = db.execute("SELECT version,positions FROM research_workspace_layouts WHERE project_id=?", (state["id"],)).fetchone()
     result = dict(state)
     result["experience"] = "conversation" if state["scenario"] == "memoir" and state.get("mode") == "ai" else "workspace"
@@ -173,7 +196,7 @@ def _schedule(db, state, kind):
     if kind in {"analysis", "report"}:
         missing = [item for item in interview_inventory(db, state) if item["status"] == "done" and item["utterance_count"] and not item["synced"]]
         if missing:
-            raise HTTPException(409, f"还有{len(missing)}场已结束访谈尚未同步，请到现场采集同步后再汇总")
+            raise HTTPException(409, f"还有{len(missing)}场已结束访谈尚未同步，请到访谈页同步原始证据后再汇总")
     task_id, now = uuid.uuid4().hex, time.time()
     state["job_id"] = task_id
     payload = json.dumps({"project_id": state["id"], "job_id": task_id}, ensure_ascii=False)
@@ -212,7 +235,8 @@ def save_layout(project_id: str, body: Layout):
     with store.get() as db:
         db.execute("BEGIN IMMEDIATE")
         state = _read(db, project_id)
-        allowed = {"project", *(str(i) for i in range(state["stage"] + 1))}
+        current_stage = _public(db, state)['stage'] if state['scenario'] == 'interview' else state['stage']
+        allowed = {"project", *(str(i) for i in range(current_stage + 1))}
         for node_id, point in body.positions.items():
             if node_id not in allowed or set(point) != {"x", "y"} or any(not math.isfinite(v) or abs(v) > 100000 for v in point.values()):
                 raise HTTPException(422, "节点位置无效")
@@ -228,7 +252,10 @@ def save_layout(project_id: str, body: Layout):
 
 @router.get("/projects/{project_id}/events")
 async def project_events(project_id: str, request: Request):
-    project(project_id)
+    initial = project(project_id)
+    if initial['scenario'] == 'interview':
+        from interview_prep import workspace
+        return workspace.events(project_id, request)
     async def events():
         last = None
         ticks = 0
@@ -322,16 +349,26 @@ def scenarios():
 
 
 @router.get("/projects")
-def projects():
+def projects(request: Request):
     with store.get() as db:
-        rows = db.execute("SELECT r.snapshot FROM research_workspace_runs r JOIN projects p ON p.id=r.project_id WHERE r.deleted_at=0 ORDER BY p.updated_at DESC").fetchall()
-    values = [json.loads(row["snapshot"]) for row in rows]
+        owner_id = getattr(request.state, "user", {}).get("id", LOCAL_OWNER)
+        rows = db.execute("SELECT r.snapshot FROM research_workspace_runs r JOIN projects p ON p.id=r.project_id WHERE r.deleted_at=0 AND (?=0 OR p.owner_id=?) ORDER BY p.updated_at DESC", (config.AUTH_ENABLED, owner_id)).fetchall()
+        values = []
+        for row in rows:
+            value = json.loads(row['snapshot'])
+            if value['scenario'] == 'interview':
+                from interview_prep import workspace
+                try: value = workspace.public(db, value)
+                except HTTPException as exc:
+                    if exc.status_code == 404: continue
+                    raise
+            values.append(value)
     return [{**{key: value[key] for key in ("id", "title", "scenario", "stage", "updated_at")},
              "mode": value.get("mode", "demo")} for value in values]
 
 
 @router.post("/projects", status_code=201)
-def create_project(body: CreateProject):
+def create_project(body: CreateProject, request: Request):
     prompt = body.prompt.strip()
     if not prompt:
         raise HTTPException(422, "请先写下想调研的主题")
@@ -341,6 +378,22 @@ def create_project(body: CreateProject):
         raise HTTPException(422, "运行模式无效")
     if body.mode == "ai" and not config.KIMI_API_KEY:
         raise HTTPException(503, "模型尚未配置，请填写 backend/.env 后重启服务")
+    if body.scenario == 'interview':
+        if body.mode != 'ai' or body.source_project_id: raise HTTPException(422, '面试项目使用真实准备流程')
+        from interview_prep import api as interview_api, domain, workspace
+        try:
+            cfg = interview_api.PreparationConfig.model_validate(body.interview_config or {
+                'goal': prompt, 'template': 'thesis' if any(w in prompt for w in ('论文', '答辩', '开题', '硕士', '博士')) else 'job'})
+        except ValidationError:
+            raise HTTPException(422, '面试配置不符合要求') from None
+        owner_id = getattr(request.state, 'user', {}).get('id', LOCAL_OWNER)
+        value = domain.create(owner_id, prompt[:120], body.request_id, cfg.model_dump())
+        pid = value['workspace_project_id']
+        with store.get() as db:
+            db.execute('BEGIN IMMEDIATE')
+            p, state = workspace._state(db, pid)
+            workspace.enqueue_chat(db, p, state, prompt, 'initial:' + body.request_id[:72])
+            return workspace.public(db, state)
     # UUID5 makes a retried first submission resolve to the same persisted project.
     project_id = uuid.uuid5(uuid.NAMESPACE_URL, "fieldwork:" + body.request_id).hex
     scenario = body.scenario or ("memoir" if any(w in prompt for w in ("口述", "回忆", "人生", "个人史", "自传", "往事", "童年", "爷爷", "奶奶", "姥姥", "姥爷", "父亲", "母亲")) else
@@ -352,14 +405,23 @@ def create_project(body: CreateProject):
     _message(state, prompt, "user")
     if body.mode == "demo":
         _message(state, f"我们从这次{SCENARIOS[scenario]['noun']}的目标开始。我建议采用「{SCENARIOS[scenario]['name']}」流程，你也可以切换场景。先选择几个关注方向，我会把它们整理到中央画布。")
+    owner_id = getattr(request.state, "user", {}).get("id", LOCAL_OWNER)
     with store.get() as db:
         db.execute("BEGIN IMMEDIATE")
         old = db.execute("SELECT snapshot,deleted_at FROM research_workspace_runs WHERE project_id=?", (project_id,)).fetchone()
         if old:
             if old["deleted_at"]:
                 raise HTTPException(410, "项目已删除，请新建项目")
+            if config.AUTH_ENABLED:
+                owner = db.execute("SELECT owner_id FROM projects WHERE id=?", (project_id,)).fetchone()
+                if owner and owner["owner_id"] != owner_id:
+                    raise HTTPException(404, "项目不存在")
             return _public(db, json.loads(old["snapshot"]))
         if body.source_project_id:
+            if config.AUTH_ENABLED:
+                owner = db.execute("SELECT owner_id FROM projects WHERE id=?", (body.source_project_id,)).fetchone()
+                if not owner or owner["owner_id"] != owner_id:
+                    raise HTTPException(404, "来源项目不存在")
             source = _read(db, body.source_project_id)
             if body.mode != "ai" or source.get("mode", "demo") != "demo":
                 raise HTTPException(422, "仅支持从历史示例新建真实 AI 调研")
@@ -369,7 +431,7 @@ def create_project(body: CreateProject):
             state.update(answers=source["answers"], custom_answers=source.get("custom_answers", {}), context=source["context"],
                          location=source.get("location", {}), source_project_id=source["id"])
         db.execute("INSERT INTO projects(id,name,owner_id,created_at,updated_at) VALUES(?,?,?,?,?)",
-                   (project_id, prompt[:60] + " · " + project_id[:6], LOCAL_OWNER, now, now))
+                   (project_id, prompt[:60] + " · " + project_id[:6], owner_id, now, now))
         db.execute("INSERT INTO research_workspace_runs(project_id,revision,snapshot) VALUES(?,?,?)", (project_id, 1, json.dumps(state, ensure_ascii=False)))
         if body.mode == "ai" and scenario != "memoir":
             _schedule(db, state, "intake")
@@ -398,14 +460,45 @@ def delete_project(project_id: str):
         now = time.time()
         db.execute("UPDATE research_workspace_runs SET deleted_at=? WHERE project_id=? AND deleted_at=0", (now, project_id))
         db.execute("UPDATE tasks SET status='cancelled',stage='cancelled',updated_at=?,finished_at=? "
-                   "WHERE kind IN ('research_platform','conversation_reply','conversation_archive') AND resource_id=? AND status IN ('queued','running','retry')",
+                   "WHERE kind IN ('research_platform','conversation_reply','conversation_archive','conversation_book') AND resource_id=? AND status IN ('queued','running','retry')",
                    (now, now, project_id))
         db.execute("DELETE FROM research_workspace_layouts WHERE project_id=?", (project_id,))
+        if db.execute("SELECT 1 FROM sqlite_master WHERE name='interview_preparations'").fetchone():
+            prep = db.execute('SELECT id FROM interview_preparations WHERE workspace_project_id=?', (project_id,)).fetchone()
+            if prep:
+                db.execute('UPDATE interview_preparations SET deleted_at=? WHERE id=?', (now, prep['id']))
+                owner = db.execute('SELECT owner_id FROM projects WHERE id=?', (project_id,)).fetchone()['owner_id']
+                db.execute("UPDATE tasks SET status='cancelled',stage='cancelled',updated_at=?,finished_at=? WHERE owner_id=? AND resource_id IN (?,?) AND status IN ('queued','running','retry')", (now, now, owner, project_id, prep['id']))
+                for table in ('workspace_chat_messages', 'workspace_chat_runs', 'workspace_events'):
+                    db.execute(f'DELETE FROM {table} WHERE project_id=?', (project_id,))
+        # 新派生内容不随逻辑删除继续可检索；原始对谈仍按现有生命周期保留。
+        tables = {r["name"] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for table in ("memoir_agent_memory", "memoir_agent_plans", "memoir_agent_runs", "memoir_agent_diagnostics", "memoir_books", "memoir_book_versions", "memoir_book_steps", "memoir_book_settings"):
+            if table in tables:
+                if table == "memoir_agent_memory" and "memoir_memory_versions" in tables:
+                    db.execute("DELETE FROM memoir_memory_versions WHERE memory_id IN (SELECT id FROM memoir_agent_memory WHERE project_id=?)", (project_id,))
+                db.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
     return {"id": project_id, "deleted": True}
 
 
 @router.post("/projects/{project_id}/commands")
-def command(project_id: str, body: Command):
+def command(project_id: str, body: Command, request: Request):
+    with store.get() as db:
+        state = _read(db, project_id)
+        interview = state['scenario'] == 'interview'
+    if interview:
+        from interview_prep import workspace, api as interview_api
+        if body.scene_command is not None:
+            with store.get() as db: prep = workspace.preparation(db, project_id)
+            # 复用原端点的音频上传锁、校对确认和原音拼装，不能绕过逐题状态机。
+            try: command_body = interview_api.Command.model_validate(body.scene_command)
+            except ValidationError: raise HTTPException(422, '面试操作参数不符合要求') from None
+            interview_api.command(prep['id'], command_body, request)
+            return project(project_id)
+        with store.get() as db:
+            db.execute('BEGIN IMMEDIATE')
+            state = _read(db, project_id)
+            return workspace.chat_command(db, state, body)
     with store.get() as db:
         db.execute("BEGIN IMMEDIATE")
         state = _read(db, project_id)
@@ -430,6 +523,8 @@ def command(project_id: str, body: Command):
         if body.action == "scenario":
             if body.scenario not in SCENARIOS:
                 raise HTTPException(422, "不支持的场景")
+            if body.scenario == 'interview':
+                raise HTTPException(409, '面试使用专业练习流程，请新建面试项目；现有资料保持不变')
             if state["stage"] != 0:
                 raise HTTPException(409, "已有成果的项目请通过新建项目更换场景")
             state.update(scenario=body.scenario, answers={})
@@ -472,7 +567,7 @@ def command(project_id: str, body: Command):
                 if body.action == "brief" and not selected:
                     raise HTTPException(422, "请先补齐调研方向的选择")
             if state["stage"] != 0:
-                raise HTTPException(409, "需求已确认")
+                raise HTTPException(409, "调研目标已确认")
             state.update(answers=answers, custom_answers=custom_answers, context=body.context.strip())
             if body.location is not None:
                 if set(body.location) - {"city", "market"} or any(len(v) > 120 or "\n" in v or "\r" in v for v in body.location.values()):
@@ -481,21 +576,21 @@ def command(project_id: str, body: Command):
             if body.action == "brief":
                 details = "\n".join(f"- {field['label']} {'、'.join(answers[field['key']])}" for field in fields)
                 if ai:
-                    _message(state, "已确认调研需求：\n" + details + ("\n补充：" + state["context"] if state["context"] else ""), "user")
-                    _artifact(state, 0, "需求确认单", f"# {state['title']}\n\n{details}\n\n补充：{state['context']}\n\n地点：{json.dumps(state.get('location', {}), ensure_ascii=False)}", origin="user")
+                    _message(state, "已确认调研目标与范围：\n" + details + ("\n补充：" + state["context"] if state["context"] else ""), "user")
+                    _artifact(state, 0, "调研目标与范围" if state["scenario"] != "memoir" else "讲述目标确认", f"# {state['title']}\n\n{details}\n\n补充：{state['context']}\n\n地点：{json.dumps(state.get('location', {}), ensure_ascii=False)}", origin="user")
                     state["stage"] = 1
                     _schedule(db, state, "background")
                     _save(db, state)
                     return _public(db, state)
-                _artifact(state, 0, "需求确认单", f"# {state['title']}\n\n## 目标与范围\n{details}\n\n## 补充信息\n{state['context'] or '暂未补充，可在后续访谈中进一步明确。'}\n\n## 执行方式\n采用{spec['name']}流程。当前为流程示例，尚未执行联网研究或模型分析。")
+                _artifact(state, 0, "调研目标与范围" if state["scenario"] != "memoir" else "讲述目标确认", f"# {state['title']}\n\n## 目标与范围\n{details}\n\n## 补充信息\n{state['context'] or '暂未补充，可在后续访谈中进一步明确。'}\n\n## 执行方式\n采用{spec['name']}流程。当前为流程示例，尚未执行联网研究或模型分析。")
                 _artifact(state, 1, spec["steps"][1] + " · 示例草稿", _background(state))
                 state["stage"] = 1
-                _message(state, "需求已经整理好了。我已生成一份准备计划示例，并挂到画布上。你可以打开查看、修改，确认后继续生成提纲示例。\n\n当前尚未执行真实联网检索，示例内容不作为调研事实。")
+                _message(state, "调研目标与研究范围已整理。我已生成一份研究方案示例，并挂到画布上。你可以打开查看、修改，确认后继续生成提纲示例。\n\n当前尚未执行真实联网检索，示例内容不作为调研事实。")
         elif body.action == "advance":
             if ai:
                 if state["stage"] == 1:
                     if not any(a["step"] == 1 and a.get("kind") != "document" and a.get("origin") == "ai" and not a.get("stale") for a in state["artifacts"]):
-                        raise HTTPException(409, "请先完成背景与计划")
+                        raise HTTPException(409, "请先完成并审阅研究方案")
                     state["stage"] = 2
                     _schedule(db, state, "outline")
                 elif state["stage"] == 2:
@@ -527,7 +622,7 @@ def command(project_id: str, body: Command):
                 _message(state, "提纲示例已准备好，包含开场、主题问题与追问。点击画布上的文件即可编辑。确认提纲后，我们进入采集准备。")
             elif state["stage"] == 2:
                 state["stage"] = 3
-                _artifact(state, 3, "现场采集准备清单", "# 现场采集准备清单\n\n- 确认访谈对象、地点和预计时长。\n- 说明访谈目的并取得录音同意。\n- 检查提纲与设备电量。\n- 记录现场观察与需要核实的事实。\n\n## 采集能力\n当前交付为工作台第一阶段。真实录音、材料导入、手机扫码采集与后续分析将在下一阶段接入，本页面不会启动麦克风或生成虚构逐字稿。")
+                _artifact(state, 3, "访谈准备清单", "# 访谈准备清单\n\n- 确认访谈对象、地点和预计时长。\n- 说明访谈目的并取得录音同意。\n- 检查提纲与设备电量。\n- 记录现场观察与需要核实的事实。\n\n## 采集能力\n此项目是历史流程示例，不启动录音或生成访谈事实。新建研究项目后，可使用访谈录音、资料导入及洞察分析。")
                 _message(state, "已进入采集准备，提纲与准备清单会保存在这个项目里。第一轮先完成平台骨架，录音、手机接续与真实材料分析尚未接入。你可以继续编辑或导出当前成果。")
             else:
                 raise HTTPException(409, "当前阶段暂无可自动执行的下一步")
@@ -538,7 +633,7 @@ def command(project_id: str, body: Command):
         elif body.action == "start_interview":
             outline = next((a for a in reversed(state["artifacts"]) if a["step"] == 2 and a.get("kind") not in {"question_selection", "document"}), None)
             if not ai or state["stage"] < 2 or not outline or outline.get("stale"):
-                raise HTTPException(409, "请先完成并审阅有效的调研提纲")
+                raise HTTPException(409, "请先完成并审阅有效的访谈提纲")
             if body.outline_version != outline["version"]:
                 raise HTTPException(409, "提纲已更新，请重新勾选问题")
             choices = body.selected_questions
@@ -564,7 +659,7 @@ def command(project_id: str, body: Command):
                     outline,status,created_at,subject_source,owner_id,location,project_id,project_name)
                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (sid, state["title"][:80], spec["name"], itype, industry,
                     "、".join(state["answers"].get("goal", []))[:500], "本地使用者", json.dumps(choices, ensure_ascii=False),
-                    "live", time.time(), "user", LOCAL_OWNER, json.dumps(state.get("location", {}), ensure_ascii=False), project_id, state["title"][:80]))
+                    "live", time.time(), "user", db.execute("SELECT owner_id FROM projects WHERE id=?", (project_id,)).fetchone()["owner_id"], json.dumps(state.get("location", {}), ensure_ascii=False), project_id, state["title"][:80]))
                 number = db.execute("SELECT COUNT(*) FROM sessions WHERE project_id=? AND status!='deleting'", (project_id,)).fetchone()[0]
                 label = body.title.strip()[:80] or f"第{number}场访谈"
                 db.execute("UPDATE sessions SET subject=? WHERE id=?", (label, sid))
@@ -617,7 +712,7 @@ def command(project_id: str, body: Command):
         elif body.action == "material":
             content = body.content.strip()
             if not ai or state["stage"] < 1 or not content or len(content) > 20000:
-                raise HTTPException(422, "请确认需求后添加 1 到 20000 字的原始文字材料")
+                raise HTTPException(422, "请确认调研目标后添加 1 到 20000 字的原始文字材料")
             if sum(len(a["content"]) for a in state["artifacts"] if a.get("kind") == "material") + len(content) > 50000:
                 raise HTTPException(422, "本项目原始材料总量上限为 50000 字，请拆分项目")
             _artifact(state, 3, body.title.strip() or f"原始材料 {sum(a.get('kind') == 'material' for a in state['artifacts']) + 1}", content, kind="material", origin="user")
@@ -673,7 +768,7 @@ def command(project_id: str, body: Command):
             if ai:
                 _schedule(db, state, "chat")
             else:
-                _message(state, "我已记录这条补充。第一轮暂不接通自由对话模型；你可以通过上方选择卡片确认需求，或打开成果直接编辑。真实 Agent 对话将在下一轮接入。")
+                _message(state, "我已记录这条补充。第一轮暂不接通自由对话模型；你可以通过上方选择卡片确认研究范围，或打开成果直接编辑。真实 Agent 对话将在下一轮接入。")
         else:
             raise HTTPException(422, "不支持的操作")
         _save(db, state)
@@ -709,7 +804,7 @@ def execute_ai_job(payload, ctx):
         output.append(text)
         flush()
     try:
-        ctx.progress("正在理解调研需求" if job["kind"] == "intake" else "正在准备模型上下文", .05)
+        ctx.progress("正在梳理调研目标" if job["kind"] == "intake" else "正在准备模型上下文", .05)
         result = platform_ai.generate(job["kind"], state, ctx, on_text)
         flush(True)
         with store.get() as db:
@@ -776,7 +871,7 @@ def _background(state):
     goals = "、".join(state["answers"]["goal"])
     if state["scenario"] == "memoir":
         return f"# 人生时间线 · 准备草稿\n\n> 流程示例，尚未采集人物原始讲述。\n\n## 本次讲述\n{state['prompt']}\n\n## 主题范围\n{goals}\n\n## 建议的时间线\n1. 童年与故乡：家庭、生活环境和最早的记忆。\n2. 求学与成长：重要的人、选择与转折。\n3. 工作与家庭：亲历的事件及当时的感受。\n4. 回望与寄语：希望被记住的故事。\n\n## 待补充资料\n具体年份、人物关系、地点与可供印证的照片或文稿均待本人确认。\n\n## 来源\n仅依据本项目需求整理，没有调用外部来源。"
-    return f"# {SCENARIOS[state['scenario']]['steps'][1]} · 准备草稿\n\n> 流程示例，未执行联网检索，不能作为事实背景。\n\n## 调研主题\n{state['prompt']}\n\n## 研究重点\n{goals}\n\n## 建议准备的资料\n1. 地区或企业的公开基础信息与近期变化。\n2. 行业发展、经营环境与主要参与者。\n3. 与关注主题有关的政策、公开数据和既有研究。\n\n## 执行计划\n先核对公开资料，再进行多对象访谈，最后交叉比较信息。将来源、发布日期和待核实事项分别记录。\n\n## 来源与待核实事项\n本轮未联网。地区数据、企业事实和行业判断都需要后续检索或访谈证实。"
+    return f"# {SCENARIOS[state['scenario']]['steps'][1]} · 准备草稿\n\n> 流程示例，未执行联网检索，不能作为事实背景。\n\n## 调研主题\n{state['prompt']}\n\n## 研究问题\n{goals}\n\n## 待验证假设\n围绕上述研究问题收集真实经历与行为证据；目前尚未验证任何需求或原因。\n\n## 建议准备的资料\n1. 地区或企业的公开基础信息与近期变化。\n2. 行业发展、经营环境与主要参与者。\n3. 与关注主题有关的政策、公开数据和既有研究。\n\n## 研究方法与执行安排\n明确目标人群与招募标准，记录具体场景、现有做法与痛点。先核对公开资料，再进行多对象访谈，最后交叉比较信息。将来源、发布日期和待核实事项分别记录。\n\n## 来源与待核实事项\n本轮未联网。地区数据、企业事实和行业判断都需要后续检索或访谈证实。"
 
 
 def _outline(state):

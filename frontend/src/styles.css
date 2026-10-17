@@ -20,7 +20,7 @@
 .hero-heading .hero-wordmark{display:flex;flex-direction:column;align-items:center;gap:12px;letter-spacing:normal}
 .hero-heading .hero-wordmark .wordmark-cn{font-family:"Fieldwork Serif","Songti SC",SimSun,serif;font-size:clamp(56px,4.7vw,76px);font-weight:500;line-height:1.15;letter-spacing:.16em;text-indent:.16em}
 .hero-heading .hero-wordmark .wordmark-en{font-family:"Manrope Variable",sans-serif;font-size:12px;font-weight:500;line-height:1.5;letter-spacing:.38em;text-indent:.38em;text-transform:uppercase;color:var(--muted)}
-.hero-heading .hero-subtitle{position:relative;display:inline-grid;grid-template-columns:1fr;font-family:"Fieldwork Serif","Songti SC",SimSun,serif;font-size:clamp(14px,1.2vw,18px);font-weight:500;letter-spacing:.09em;line-height:1.8;margin-top:25px;max-width:100%;white-space:nowrap}
+.hero-heading .hero-subtitle{position:relative;display:inline-grid;grid-template-columns:1fr;font-family:"Fieldwork Serif","Songti SC",SimSun,serif;font-size:clamp(14px,1.2vw,18px);font-weight:500;letter-spacing:.09em;line-height:1.8;margin-top:25px;max-width:100%;white-space:normal}
 .typewriter-measure,.typewriter-line{grid-column:1;grid-row:1}
 .typewriter-measure{visibility:hidden}
 .typewriter-line{text-align:left}

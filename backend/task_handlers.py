@@ -407,6 +407,8 @@ HANDLERS = {"outline": handle_outline, "report": handle_report, "project_record"
 HANDLERS.update(MEMOIR_HANDLERS)
 from interview_prep.ai import HANDLERS as INTERVIEW_HANDLERS
 HANDLERS.update(INTERVIEW_HANDLERS)
+from interview_prep.workspace import handler as handle_interview_chat
+HANDLERS['interview_chat'] = handle_interview_chat
 from research_platform import execute_ai_job
 HANDLERS["research_platform"] = execute_ai_job
 from conversation_engine import HANDLERS as CONVERSATION_HANDLERS

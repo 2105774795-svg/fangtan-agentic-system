@@ -1,0 +1,36 @@
+flowchart TB
+    NEW["新版体察工作台<br/>React 19 · TypeScript · Vite · React Flow"]
+    OLD["旧版汇言笔 / 时叙录<br/>原生 HTML / CSS / JavaScript · /legacy"]
+    HOS["鸿蒙客户端源码<br/>ArkWeb + 原生录音 · 旧版录音桥"]
+
+    subgraph API["进程一：FastAPI · 单 Uvicorn worker"]
+        PLATFORM["research_platform.py<br/>/api/platform · 项目 / 命令 / 成果 / 快照 SSE"]
+        INTERVIEW["app.py + task_api.py<br/>访谈 / 录音 / 导入 / 项目 / 导出"]
+        MEMOIR["memoir/api.py + auth.py<br/>/api/memoir · 独立认证的私密口述史"]
+    end
+
+    NEW -->|REST + 项目快照 SSE| PLATFORM
+    NEW -->|复用录音与导入接口| INTERVIEW
+    OLD --> INTERVIEW
+    OLD --> MEMOIR
+    HOS -->|原生分片上传| INTERVIEW
+
+    DB[("同一 SQLite：data/fangtan.db<br/>projects / sessions / utterances / reports<br/>research_workspace_* / memoir_* / tasks")]
+    FILES["本地 data/ 文件目录<br/>uploads / recordings / reports<br/>memoir-private/recordings"]
+    WORKER["进程二：worker.py → task_handlers.py<br/>平台 AI / 导入 / 纪要 / 综合 / 问透 / 口述史"]
+    CLOUD["外部 AI 与语音服务<br/>Kimi：生成 / 流式输出 / 公开检索<br/>DashScope：云端音频转写"]
+    AUTH["外部员工中心<br/>登录 / 会话校验 / 员工查询<br/>实现不在此仓库"]
+
+    PLATFORM -->|状态与任务同事务写入| DB
+    INTERVIEW --> DB
+    MEMOIR --> DB
+    INTERVIEW --> FILES
+    MEMOIR --> FILES
+    DB -->|领取 tasks / 租约 / 心跳| WORKER
+    WORKER -->|进度 / 流式文本 / 成果回写| DB
+    WORKER --> FILES
+    WORKER --> CLOUD
+    INTERVIEW -->|实时转写 / API 内追问线程| CLOUD
+    MEMOIR -->|回合转写与追问| CLOUD
+    INTERVIEW -.->|启用员工认证时| AUTH
+    MEMOIR -.->|始终独立验证员工身份| AUTH

@@ -8,31 +8,38 @@ const output = 'data/qa/conversation'; fs.mkdirSync(output, { recursive: true })
  try {
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, permissions: ['microphone'] });
   await context.addInitScript(() => {
+   const Audio = window.AudioContext;
+   window.AudioContext = class extends Audio {
+    createAnalyser() { const analyser = super.createAnalyser(); analyser.getFloatTimeDomainData = array => array.fill(.1); return analyser; }
+   };
    window.SpeechSynthesisUtterance = class { constructor(text) { this.text = text; } };
    Object.defineProperty(window, 'speechSynthesis', { value: { getVoices: () => [{ lang: 'zh-CN', localService: true }], speak: u => { window.__spoken = (window.__spoken || []).concat(u.text); setTimeout(() => u.onend?.(), 60); }, cancel: () => {} } });
   });
+  // 该集成脚本的虚拟麦克风不是人声，明确使用音量回退；真实模型覆盖见 test-auto-conversation。
+  await context.route('**/platform-assets/vad/silero_vad_v5.onnx', route => route.fulfill({ status: 404, body: '' }));
   const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.goto(base);
   await page.getByLabel('今天想准备哪一次对话？').fill('我想记录爷爷的口述史 ' + Date.now());
   await page.getByRole('button', { name: '开始调研', exact: true }).click();
   await page.getByText('您好，很高兴和您聊聊天。以后我应该怎么称呼您？', { exact: true }).waitFor();
   assert.equal(await page.getByTestId('research-map').count(), 0);
-  assert.equal(await page.getByRole('button', { name: '开始聊天', exact: true }).isEnabled(), false);
+  assert.equal(await page.getByRole('button', { name: '开始自动对谈', exact: true }).isEnabled(), false);
   const pid = new URL(page.url()).searchParams.get('project');
   const readArchive = async () => (await page.request.get(`${base}/api/platform/projects/${pid}/conversation-archive`)).json();
   await page.getByRole('checkbox').check();
   await page.getByRole('button', { name: '用文字说', exact: true }).click();
   await page.getByLabel('写下您想讲的内容').fill('小时候，母亲经常带我去赶集。');
   await page.getByRole('button', { name: '发送这段话', exact: true }).click();
-  await page.waitForFunction(() => { const t = document.querySelector('.conversation-current')?.textContent; return t?.startsWith('您提到') && t.length < 25; });
+  // Agent 工具参数不进入对话；短回复完成校验后才交给页面和朗读。
   await page.getByText('您提到和母亲赶集的往事，那时最盼着吃到什么？', { exact: true }).waitFor();
   await page.reload();
   await page.getByText('小时候，母亲经常带我去赶集。', { exact: false }).first().waitFor();
   await page.getByRole('button', { name: '今天先聊到这里', exact: true }).click();
-  await page.getByRole('heading', { name: '谢谢您，把这些故事留了下来。' }).waitFor();
+  await page.getByRole('heading', { name: '谢谢您，今天的讲述已经留下。' }).waitFor();
   await page.reload();
-  await page.getByRole('heading', { name: '谢谢您，把这些故事留了下来。' }).waitFor();
-  await page.getByRole('button', { name: '看看我的档案', exact: true }).click();
+  await page.getByRole('heading', { name: '谢谢您，今天的讲述已经留下。' }).waitFor();
+  await page.getByRole('button', { name: '看看我的传记', exact: true }).click();
+  await page.getByRole('button', { name: '资料与核对', exact: true }).click();
   await page.getByText('小时候，母亲经常带我去赶集。', { exact: true }).first().waitFor();
   await page.getByRole('button', { name: '查看这段的原话与录音', exact: true }).click();
   await page.getByRole('region', { name: '原话依据' }).waitFor();
@@ -45,10 +52,10 @@ const output = 'data/qa/conversation'; fs.mkdirSync(output, { recursive: true })
   await page.getByRole('button', { name: '这次故事我看过了', exact: true }).click();
   await page.getByText('已审阅 · 保留原话依据', { exact: true }).waitFor();
 
-  await page.getByRole('button', { name: '继续聊聊', exact: true }).click();
+  await page.getByRole('button', { name: '继续讲述', exact: true }).click();
   await page.getByText('很高兴又和您聊天。您愿意接着上次的故事讲，还是聊一段新的回忆？', { exact: true }).waitFor();
   await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: '开始聊天', exact: true }).click();
+  await page.getByRole('button', { name: '开始自动对谈', exact: true }).click();
   await page.getByRole('button', { name: '我说完了', exact: true }).waitFor();
   assert.ok(await page.evaluate(() => window.__spoken.length > 0));
   await page.waitForTimeout(11200);
@@ -61,7 +68,7 @@ const output = 'data/qa/conversation'; fs.mkdirSync(output, { recursive: true })
   await page.waitForTimeout(900);
   // Leave while ASR is unavailable; persisted audio remains retryable on return.
   await page.route('**/conversations/*/audio', route => route.fulfill({ status: 502, contentType: 'application/json', body: JSON.stringify({ detail: '模拟转写暂未完成' }) }));
-  await page.getByRole('button', { name: '暂停一下', exact: true }).click();
+  await page.getByRole('button', { name: '暂停对谈', exact: true }).click();
   await page.getByRole('button', { name: '重试转写并发送', exact: true }).click();
   await page.getByRole('button', { name: '返回首页', exact: true }).click();
   await page.locator('.home-composer').waitFor();
@@ -74,7 +81,7 @@ const output = 'data/qa/conversation'; fs.mkdirSync(output, { recursive: true })
   const value = await readArchive(); const live = value.sessions.find(s => s.status === 'live');
   assert.ok(live.turns.find(t => t.role === 'human').audio_ids.length >= 2, 'independently decodable audio segments');
   const mobile = await context.newPage(); await mobile.setViewportSize({ width: 390, height: 844 }); await mobile.goto(`${base}/?project=${pid}`);
-  await mobile.getByRole('button', { name: '开始聊天', exact: true }).waitFor();
+  await mobile.getByRole('button', { name: '开始自动对谈', exact: true }).waitFor();
   assert.ok(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await mobile.screenshot({ path: `${output}/mobile.png`, fullPage: true });
   // Exercise automatic silence boundary independently from file segmentation.
@@ -84,7 +91,7 @@ const output = 'data/qa/conversation'; fs.mkdirSync(output, { recursive: true })
       state = 'running';
       async resume() {}
       async close() { this.state = 'closed'; }
-      createMediaStreamSource() { return { connect() {} }; }
+      createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
       createAnalyser() { let calls = 0; return { fftSize: 1024, getFloatTimeDomainData(array) { window.__vadCalls = calls; array.fill(calls++ < 5 ? .1 : 0); } }; }
     };
   });
@@ -94,7 +101,7 @@ const output = 'data/qa/conversation'; fs.mkdirSync(output, { recursive: true })
   await vad.bringToFront();
   await vad.getByRole('checkbox').check();
   const baseline = 0;
-  await vad.getByRole('button', { name: '开始聊天', exact: true }).click();
+  await vad.getByRole('button', { name: '开始自动对谈', exact: true }).click();
   await vad.waitForFunction(async ({ pid, baseline }) => { const value = await (await fetch(`/api/platform/projects/${pid}/conversation-archive`)).json(); return value.sessions.find(s => s.status === 'live').turns.filter(t => t.role === 'human').length > baseline; }, { pid: vadPid, baseline }, { timeout: 20000 }).catch(async e => { console.log('VAD diagnostic', await vad.locator('.conversation-main').innerText(), await vad.evaluate(() => ({calls:window.__vadCalls,spoken:window.__spoken}))); throw e; });
   await vad.getByRole('button', { name: '返回首页', exact: true }).click();
   assert.deepEqual(errors, []);

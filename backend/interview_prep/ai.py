@@ -199,7 +199,7 @@ def handler(payload, ctx):
     with d.store.get() as db:
         project = d.owned(db, payload['project_id'], payload['owner_id'])
         practice_id = payload.get('practice_id')
-        target = d.practice_owned(db, project, practice_id) if practice_id else project
+        target = d.bank_question(db, project['id'], payload['question_id']) if payload.get('question_id') else d.practice_owned(db, project, practice_id) if practice_id else project
         if target['job_id'] != ctx.task_id: raise ValueError('superseded_task')
         data = d.task_input(db, project, practice_id,payload.get('question_id'))
         fingerprint = d.digest(data)
@@ -211,7 +211,7 @@ def handler(payload, ctx):
         db.execute('BEGIN IMMEDIATE')
         ctx.check_cancelled(db)
         project = d.owned(db, payload['project_id'], payload['owner_id'])
-        target = d.practice_owned(db, project, practice_id) if practice_id else project
+        target = d.bank_question(db, project['id'], payload['question_id']) if payload.get('question_id') else d.practice_owned(db, project, practice_id) if practice_id else project
         if target['job_id'] != ctx.task_id or d.digest(d.task_input(db, project, practice_id,payload.get('question_id'))) != fingerprint:
             raise ValueError('input_changed')
         if kind == 'interview_question_analysis':

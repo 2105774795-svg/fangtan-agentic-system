@@ -8,6 +8,12 @@
 
 | 文件 | 职责 | 当前版本 | 状态 | 主要读者 |
 |---|---|---:|---|---|
+| [`PRODUCT_LANGUAGE.md`](./PRODUCT_LANGUAGE.md) | 产品研究术语、导航文案、AI 表达与场景边界 | v1 | 已实现并经授权在本地发布 | 产品、研发、测试 |
+| [`INTERVIEW_WORKSPACE_INTEGRATION.md`](./INTERVIEW_WORKSPACE_INTEGRATION.md) | 面试融入统一工作台、项目迁移与真实流式聊天 | v1 | 已实现并经授权在本地发布 | 产品、研发、测试 |
+| [`REPLY_RECOVERY.md`](./REPLY_RECOVERY.md) | 未回复故障的工具降级、K3 消息回传、有限重试与验证 | v1 | 当前修复 | 研发、测试、运维 |
+| [`BIOGRAPHY.md`](./BIOGRAPHY.md) | 以对话补充材料、持续写作人生传记、文风与定稿保护 | v1 | 当前新增实现 | 产品、研发、测试 |
+| [`AUTO_CONVERSATION.md`](./AUTO_CONVERSATION.md) | 连续语音轮转、人声检测、停顿设置和离线验证 | v1 | 当前新增实现 | 产品、研发、测试 |
+| [`MEMOIR_AGENT.md`](./MEMOIR_AGENT.md) | 新版口述史主 Agent、可追溯记忆、跨次章节与离线验证 | v1 | 当前新增实现 | 产品、研发、测试 |
 | [`PRD.md`](./PRD.md) | 定义完整产品范围、用户场景、需求优先级和验收标准 | v0.15 | 时叙录及汇言笔双入口 | 产品、设计、研发、测试 |
 | [`USER_GUIDE.md`](./USER_GUIDE.md) | 说明安装启动、实战访谈、历史管理和故障处理 | v1.8 | 含时叙录私密空间及汇言笔入口 | 使用者、培训、运维 |
 | [`ARCHITECTURE.md`](./ARCHITECTURE.md) | 定义系统边界、组件关系、关键架构决策和演进限制 | v0.11 | 私密口述史独立业务域 | 研发、运维、技术负责人 |

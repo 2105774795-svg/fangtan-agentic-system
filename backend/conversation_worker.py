@@ -6,15 +6,16 @@ import store
 import job_queue
 import worker
 import conversation_engine
+from interview_prep import domain as interview_domain, workspace as interview_workspace
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    store.init(); job_queue.init(); conversation_engine.init()
+    store.init(); job_queue.init(); conversation_engine.init(); interview_domain.init()
     stopping = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stopping.set())
-    handlers = {'conversation_reply': conversation_engine.reply_job}
+    handlers = {'conversation_reply': conversation_engine.reply_job, 'interview_chat': interview_workspace.handler}
     while not stopping.is_set():
         if not worker.run_once(handlers=handlers, stop_event=stopping):
             stopping.wait(.25)

@@ -74,9 +74,11 @@ class InterviewPreparationTests(unittest.TestCase):
         return response
 
     def run_task(self):
+        with store.get() as db:
+            pending = db.execute("SELECT id FROM tasks WHERE status IN ('queued','retry') ORDER BY available_at,created_at,id LIMIT 1").fetchone()['id']
         self.assertTrue(worker.run_once(handlers=ai.HANDLERS,worker_id='synthetic-test'))
         self.refresh()
-        job=self.project['practices'][0]['job'] if self.project['practices'] else self.project['job']
+        job=job_queue.get(pending)
         self.assertEqual(job['status'],'ready',job)
 
     def prepare(self):

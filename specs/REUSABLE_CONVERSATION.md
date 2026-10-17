@@ -1,5 +1,9 @@
 # 独立对谈模块 · 2026-10-17
 
+> 新版口述史已增加主 Agent、可追溯长期记忆及跨次章节，当前说明见 [口述史 Agent 实现](MEMOIR_AGENT.md)。下文保留通用对谈协议。
+
+连续语音的设备复用、自动轮转、停顿计时和故障恢复见 [连续语音对谈](AUTO_CONVERSATION.md)。一次开启后自动进行多轮，暂停与结束时关闭麦克风。
+
 ## 业务与基础设施
 
 统一项目入口 → 口述史策略 → ConversationRoom（复用） → Conversation API（复用） → 逐轮回复任务 → 本次结束 → 有据整理任务 → MemoirExperience 档案。

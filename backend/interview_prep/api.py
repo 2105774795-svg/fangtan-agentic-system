@@ -115,6 +115,12 @@ def delete(pid: str, request: Request):
         db.execute('BEGIN IMMEDIATE')
         p = d.owned(db, pid, owner(request))
         db.execute('UPDATE interview_preparations SET deleted_at=? WHERE id=?', (d.time.time(), pid))
+        if p.get('workspace_project_id'):
+            db.execute('UPDATE research_workspace_runs SET deleted_at=? WHERE project_id=?', (d.time.time(), p['workspace_project_id']))
+            db.execute("UPDATE tasks SET status='cancelled',updated_at=?,finished_at=? WHERE resource_id=? AND status IN ('queued','running','retry')", (d.time.time(), d.time.time(), p['workspace_project_id']))
+            db.execute('DELETE FROM research_workspace_layouts WHERE project_id=?', (p['workspace_project_id'],))
+            for table in ('workspace_chat_messages', 'workspace_chat_runs', 'workspace_events'):
+                db.execute(f'DELETE FROM {table} WHERE project_id=?', (p['workspace_project_id'],))
         db.execute("UPDATE tasks SET status='cancelled',updated_at=?,finished_at=? WHERE resource_id=? AND kind LIKE 'interview_%' AND status IN ('queued','running','retry')", (d.time.time(), d.time.time(), pid))
     return {'deleted': True, 'retention': '原始录音保留在本机数据目录，删除项目后不再通过本模块访问'}
 

@@ -82,10 +82,16 @@ def init():
         columns = {r['name'] for r in db.execute('PRAGMA table_info(sessions)')}
         if 'purpose' not in columns:
             db.execute("ALTER TABLE sessions ADD COLUMN purpose TEXT NOT NULL DEFAULT 'research_capture'")
+        from . import workspace
+        workspace.init(db)
 
 def owned(db, pid, owner):
     row = db.execute('SELECT * FROM interview_preparations WHERE id=? AND owner_id=? AND deleted_at=0', (pid, owner)).fetchone()
     if not row: raise HTTPException(404, '面试准备项目不存在')
+    if row['workspace_project_id']:
+        linked = db.execute('''SELECT 1 FROM research_workspace_runs w JOIN projects p ON p.id=w.project_id
+            WHERE w.project_id=? AND w.deleted_at=0 AND p.owner_id=?''', (row['workspace_project_id'], owner)).fetchone()
+        if not linked: raise HTTPException(404, '项目不存在或已删除')
     return dict(row)
 
 def snapshot(db, pid, owner):
@@ -129,6 +135,8 @@ def snapshot(db, pid, owner):
             for turn in practice['turns']:
                 turn['feedback'] = None
                 turn['feedback_notice'] = ''
+                turn['decision_reason'] = ''
+                turn['target'] = ''
         project['practices'].append(practice)
     project['job'] = public_job(db, project['job_id'])
     return project
@@ -149,6 +157,7 @@ def busy(db, jid):
 
 def touch(db, pid):
     db.execute('UPDATE interview_preparations SET revision=revision+1,updated_at=? WHERE id=?', (time.time(), pid))
+    db.execute('UPDATE projects SET updated_at=? WHERE id=(SELECT workspace_project_id FROM interview_preparations WHERE id=?)', (time.time(), pid))
 
 def enqueue(db, project, kind, practice_id=None, question_id=None):
     if not config.KIMI_API_KEY and kind != 'interview_next_turn': raise HTTPException(503, '请先配置 KIMI_API_KEY，再生成准备方案或模拟面试')
@@ -158,7 +167,7 @@ def enqueue(db, project, kind, practice_id=None, question_id=None):
                   VALUES(?,?,?,?,?,1,?,?,?)''', (jid, kind, project['owner_id'], project['id'], dump(payload), now, now, now))
     if question_id: db.execute('UPDATE interview_question_bank SET job_id=? WHERE id=?',(jid,question_id))
     if practice_id: db.execute('UPDATE interview_practices SET job_id=? WHERE id=?', (jid, practice_id))
-    else: db.execute('UPDATE interview_preparations SET job_id=? WHERE id=?', (jid, project['id']))
+    elif not question_id: db.execute('UPDATE interview_preparations SET job_id=? WHERE id=?', (jid, project['id']))
     return jid
 
 def practice_owned(db, project, practice_id):
@@ -176,6 +185,8 @@ def create(owner, title, request_id, cfg):
         if row and (row['title'] != title or row['config'] != dump(cfg)):
             raise HTTPException(409, '请求编号已用于其他项目')
         db.execute('INSERT OR IGNORE INTO interview_preparations(id,owner_id,title,config,created_at,updated_at) VALUES(?,?,?,?,?,?)', (pid, owner, title, dump(cfg), now, now))
+        from . import workspace
+        workspace.attach(db, dict(db.execute('SELECT * FROM interview_preparations WHERE id=?', (pid,)).fetchone()))
         return snapshot(db, pid, owner)
 
 def command(pid, owner, body):
@@ -206,7 +217,7 @@ def command(pid, owner, body):
                 db.execute('DELETE FROM interview_question_bank WHERE id=?',(question['id'],))
                 db.execute('UPDATE interview_preparations SET plan_stale=1 WHERE id=?',(pid,))
             else:
-                if busy(db,project['job_id']): raise HTTPException(409,'请等待当前准备任务完成或取消')
+                if busy(db,question['job_id']): raise HTTPException(409,'请等待本题分析完成或取消')
                 enqueue(db,project,'interview_question_analysis',question_id=question['id'])
         elif action == 'material':
             content = body.get('content', '').strip()

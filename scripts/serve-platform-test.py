@@ -72,6 +72,16 @@ def conversation_stream(messages, on_text, **kwargs):
 
 
 def conversation_archive(system, block):
+    if system == conversation_engine.chapters.SCENE_SYSTEM:
+        return {'scenes': [{'title': '童年赶集', 'summary': row['text'], 'missing': [], 'evidence': [{'turn_id': row['turn_id'], 'quote': row['text']}]} for row in block['human_turns']], 'deferred_turn_ids': []}
+    if system == conversation_engine.chapters.PLAN_SYSTEM:
+        return {"chapters": [{"chapter_id": block['existing_chapters'][0]['id'] if block['existing_chapters'] else '', "title": "童年的生活", "scene_ids": [row['id'] for row in block['new_scenes']]}]}
+    if system == conversation_engine.chapters.AUDIT_SYSTEM:
+        return {"issues": []}
+    if system == conversation_engine.chapters.bio.CONTINUITY_SYSTEM:
+        return {"issues": []}
+    if isinstance(block, dict):
+        block = block['human_turns']
     evidence = [{"turn_id": row["turn_id"], "quote": row["text"]} for row in block[:3]]
     if 'events' in system:
         return {"events": [{"title": "童年赶集", "description": "记录了和母亲赶集的回忆。", "date_text": "未提及", "status": "candidate", "evidence": evidence}]}
@@ -86,7 +96,7 @@ def work():
 
 
 if __name__ == "__main__":
-    with patch("platform_ai.stream", side_effect=conversation_stream), patch("memoir.handlers._chat", side_effect=conversation_archive), patch("platform_ai.generate", side_effect=model_fixture), patch("kimi.gen_report", return_value="# 合成纪要\n\n仅为隔离测试。"), patch("kimi.gen_followup", return_value=None), patch("asr_dashscope.transcribe", return_value="受访者：最近顾客提出延长营业时间的建议。这是合成音频转写。"):
+    with patch("agents.model.complete", return_value={"role": "assistant", "content": "您提到和母亲赶集的往事，那时最盼着吃到什么？"}), patch("platform_ai.stream", side_effect=conversation_stream), patch("memoir.handlers._chat", side_effect=conversation_archive), patch("memoir_editor.chapters._chat", side_effect=conversation_archive), patch("platform_ai.generate", side_effect=model_fixture), patch("kimi.gen_report", return_value="# 合成纪要\n\n仅为隔离测试。"), patch("kimi.gen_followup", return_value=None), patch("asr_dashscope.transcribe", return_value="受访者：最近顾客提出延长营业时间的建议。这是合成音频转写。"):
 
         thread = threading.Thread(target=work, daemon=True)
         thread.start()

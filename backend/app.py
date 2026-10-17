@@ -78,6 +78,8 @@ conversation_engine.init()
 app.include_router(conversation_engine.router)
 interview_domain.init()
 app.include_router(interview_api.router)
+from interview_prep import workspace_api as interview_workspace_api
+app.include_router(interview_workspace_api.router)
 app.mount("/platform-assets", StaticFiles(directory=Path(__file__).parent / "static" / "platform" / "platform-assets", check_dir=False), name="platform-assets")
 app.mount("/platform-media", StaticFiles(directory=Path(__file__).parent / "static" / "platform-media", check_dir=False), name="platform-media")
 config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)

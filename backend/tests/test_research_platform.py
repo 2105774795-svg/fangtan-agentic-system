@@ -53,6 +53,25 @@ class ResearchPlatformTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/platform/projects/{first['id']}").json(), first)
         self.assertEqual(len(self.client.get("/api/platform/projects").json()), 1)
 
+    def test_research_terms_keep_existing_goal_values_and_do_not_rewrite_saved_documents(self):
+        market = platform.SCENARIOS['market']
+        self.assertIn('识别用户痛点', market['fields'][1]['options'])
+        self.assertIn('了解市场现状', market['fields'][1]['options'])
+        self.assertEqual(market['steps'][0], '定义调研目标')
+        self.assertEqual(market['steps'][5], '研究成果')
+        project = self.create()
+        old_answers = {field['key']: [field['options'][-1]] for field in market['fields']}
+        confirmed = self.command(project, 'brief', answers=old_answers)
+        self.assertEqual(confirmed.status_code, 200, confirmed.text)
+        value = confirmed.json()
+        self.assertEqual(value['artifacts'][0]['title'], '调研目标与范围')
+        self.assertIn('待验证假设', value['artifacts'][1]['content'])
+        text = '# 人工命名的旧报告\n\n保留原始判断与原话。'
+        edited = self.command(value, 'artifact', artifact_id=value['artifacts'][0]['id'], content=text)
+        self.assertEqual(edited.status_code, 200)
+        restored = self.client.get('/api/platform/projects/' + project['id']).json()
+        self.assertEqual(restored['artifacts'][0]['content'], text)
+
     def test_delete_hides_project_and_rejects_stale_writes_without_touching_other_projects(self):
         project = self.create(request_id="delete-target")
         other = self.create(request_id="keep-other")
@@ -87,7 +106,8 @@ class ResearchPlatformTests(unittest.TestCase):
         self.assertEqual(self.client.get(f"/api/platform/projects/{project['id']}").status_code, 404)
 
     def test_all_scenarios_work_without_login(self):
-        for scene in platform.SCENARIOS:
+        # 面试使用专业准备/练习状态机；下面验证三类原调研示例的确定性推进。
+        for scene in ('market', 'enterprise', 'memoir'):
             project = self.create(scene, f"isolated-{scene}")
             for step in ("brief", "advance", "advance"):
                 response = self.command(project, step, answers=self.answers(scene))
@@ -97,6 +117,11 @@ class ResearchPlatformTests(unittest.TestCase):
             self.assertEqual(len(project["artifacts"]), 4)
             self.assertTrue(all(item["demo"] for item in project["artifacts"]))
             self.assertEqual(self.command(project, "advance").status_code, 409)
+
+    def test_switching_research_to_interview_does_not_create_an_unmapped_project(self):
+        project = self.create()
+        self.assertEqual(self.command(project, 'scenario', scenario='interview').status_code, 409)
+        self.assertEqual(self.client.get('/api/platform/projects/' + project['id']).json()['scenario'], 'market')
 
     def test_demo_restart_copies_only_user_inputs(self):
         source = self.create()

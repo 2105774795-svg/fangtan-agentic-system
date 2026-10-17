@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 
 import imageio_ffmpeg
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
@@ -24,9 +24,29 @@ import config
 import job_queue
 import platform_ai
 import store
+import employee_auth
+from agents import memoir_agent
+from agents.errors import ERROR_MESSAGES, classify, diagnostic
+from agents.tools import enqueue_book
+from memory import repository as memory_store
+from memoir_editor import chapters
+from memoir_editor import biography
+from memoir_editor.models import BookRequest, BookSettings
 from conversation_policies import POLICIES
 
-router = APIRouter(prefix="/api/platform/projects/{pid}", tags=["conversations"])
+
+async def require_project_access(pid: str, request: Request):
+    # AUTH=false 继续是本机单人模式；开启员工认证后不得按猜到的项目ID读记忆。
+    if config.AUTH_ENABLED:
+        user = getattr(request.state, "user", None) or await employee_auth.current_user(request)
+        with store.get() as db:
+            row = db.execute("SELECT owner_id FROM projects WHERE id=?", (pid,)).fetchone()
+            if not row or row["owner_id"] != user["id"]:
+                raise HTTPException(404, "项目不存在或无权访问")
+
+
+router = APIRouter(prefix="/api/platform/projects/{pid}", tags=["conversations"],
+                   dependencies=[Depends(require_project_access)])
 _audio_locks = {}
 
 
@@ -47,6 +67,7 @@ def init():
             """CREATE TABLE IF NOT EXISTS conversation_archive_versions(session_id TEXT NOT NULL,revision INTEGER NOT NULL,document TEXT NOT NULL,created_at REAL NOT NULL,PRIMARY KEY(session_id,revision))""",
             "CREATE INDEX IF NOT EXISTS conversation_project ON conversation_sessions(project_id,created_at)"):
             db.execute(sql)
+        memory_store.init(db)
 
 
 def _project(db, pid):
@@ -73,17 +94,21 @@ def _turn(db, sid, role, text, client_id, control=""):
 def _enqueue(db, pid, kind, payload):
     tid, now = uuid.uuid4().hex, time.time()
     db.execute("""INSERT INTO tasks(id,kind,owner_id,resource_id,payload,max_attempts,available_at,created_at,updated_at)
-                  VALUES(?,?, -1,?,?,1,?,?,?)""", (tid, kind, pid, json.dumps(payload), now, now, now))
+                  VALUES(?,?, -1,?,?,?,?,?,?)""", (tid, kind, pid, json.dumps(payload), 2 if kind == 'conversation_reply' else 1, now, now, now))
     return tid
 
 
 def _job(db, tid):
-    row = db.execute("SELECT id,status,stage,progress,error FROM tasks WHERE id=?", (tid,)).fetchone()
+    row = db.execute("SELECT id,status,stage,progress,error,attempts,max_attempts FROM tasks WHERE id=?", (tid,)).fetchone()
     if not row:
         return None
     value = dict(row)
     if value["error"]:
-        value["error"] = "暂时没能完成，原始内容已经保存，可以重试。"
+        code = value['error'][6:] if value['error'].startswith('agent:') else ''
+        value['error_code'] = code if code in ERROR_MESSAGES else ''
+        value["error"] = ERROR_MESSAGES.get(code, "暂时没能完成，原始内容已经保存，可以重试。")
+    if value['status'] == 'ready' and db.execute("SELECT 1 FROM memoir_agent_diagnostics WHERE task_id=? AND code='reply_fallback' LIMIT 1", (tid,)).fetchone():
+        value['notice'] = '本轮使用简短系统接续，未生成完整 AI 回复；您的讲述已保存，可以继续讲。'
     return value
 
 
@@ -102,6 +127,8 @@ def _snapshot(db, pid, sid):
     person = db.execute("SELECT preferred_name FROM conversation_people WHERE project_id=?", (pid,)).fetchone()
     session["preferred_name"] = person["preferred_name"] if person else ""
     session["turns"] = turns
+    plan = db.execute("SELECT plan,revision FROM memoir_agent_plans WHERE project_id=? AND session_id=?", (pid, sid)).fetchone()
+    session["agent"] = {"plan": json.loads(plan["plan"]), "revision": plan["revision"]} if plan else None
     return session
 
 
@@ -151,7 +178,72 @@ def archive(pid: str):
     with store.get() as db:
         project = _project(db, pid)
         sessions = [_snapshot(db, pid, row["id"]) for row in db.execute("SELECT id FROM conversation_sessions WHERE project_id=? ORDER BY created_at DESC", (pid,)).fetchall()]
-        return {"title": project["title"], "sessions": sessions, "legacy_artifacts": project["artifacts"]}
+        book = chapters.snapshot(db, pid)
+        return {"title": project["title"], "sessions": sessions, "legacy_artifacts": project["artifacts"],
+                "memories": memory_store.memories(db, pid), "book": book["book"], "book_job": book["job"],
+                "book_settings": book["settings"], "book_gaps": book["gaps"]}
+
+
+class MemoryReview(BaseModel):
+    revision: int = Field(ge=1)
+    action: str
+    note: str = Field(default="", max_length=1000)
+    replaces: str | None = Field(default=None, max_length=80)
+
+
+@router.post("/conversation-memories/{mid}/review")
+def review_memory(pid: str, mid: str, body: MemoryReview):
+    with store.get() as db:
+        db.execute("BEGIN IMMEDIATE")
+        return memory_store.review(db, pid, mid, body.revision, body.action, body.note, body.replaces)
+
+
+@router.get("/conversation-book")
+def read_book(pid: str):
+    with store.get() as db:
+        return chapters.snapshot(db, pid)
+
+
+@router.post("/conversation-book")
+def generate_book(pid: str, body: BookRequest = BookRequest()):
+    with store.get() as db:
+        db.execute("BEGIN IMMEDIATE")
+        if not chapters.inputs(db, pid):
+            raise HTTPException(409, "请先留下本人讲述")
+        if body.mode == 'polish' and not biography.settings(db, pid)['style_approved']:
+            raise HTTPException(409, '请先阅读样章并认可写法，再进行全书统稿')
+        return enqueue_book(db, pid, mode=body.mode)
+
+
+@router.post("/conversation-book/settings")
+def update_book_settings(pid: str, body: BookSettings):
+    with store.get() as db:
+        db.execute("BEGIN IMMEDIATE")
+        return biography.change_settings(db, pid, body)
+
+
+class BookReview(BaseModel):
+    revision: int = Field(ge=1)
+    action: str
+    chapter_index: int | None = Field(default=None, ge=0)
+    paragraph_index: int | None = Field(default=None, ge=0)
+    text: str = Field(default="", max_length=5000)
+    chapter_id: str = Field(default="", max_length=80)
+
+
+@router.post("/conversation-book/review")
+def review_book(pid: str, body: BookReview):
+    with store.get() as db:
+        db.execute("BEGIN IMMEDIATE")
+        return chapters.review(db, pid, body)
+
+
+@router.get("/conversation-book/versions")
+def book_versions(pid: str):
+    with store.get() as db:
+        memory_store.require_project(db, pid)
+        return {"versions": [{"revision": r["revision"], "created_at": r["created_at"], "document": json.loads(r["document"])}
+                             for r in db.execute("SELECT * FROM memoir_book_versions WHERE project_id=? ORDER BY revision DESC LIMIT 20", (pid,))]}
 
 
 @router.get("/conversations/{sid}/events")
@@ -407,19 +499,32 @@ def reply_job(payload, ctx):
                 db.execute("UPDATE conversation_turns SET output=? WHERE id=? AND task_id=?", ("".join(output), tid, ctx.task_id))
             last = time.monotonic()
     try:
-        text = platform_ai.stream(messages, on_text, max_tokens=700).strip()
+        if session["kind"] == "memoir":
+            decision = memoir_agent.run(pid, sid, tid, ctx)
+            text = decision.message
+            # 工具与内部决策永不进入语音流；最终文本通过校验才对外展示。
+            on_text(text)
+        else:
+            text = platform_ai.stream(messages, on_text, max_tokens=700).strip()
         if not text or len(text) > 1000 or text.count("？") + text.count("?") > 1:
             raise ValueError("回应应一次只问一个问题")
         with store.get() as db:
             db.execute("BEGIN IMMEDIATE")
             ctx.check_cancelled(db)
-            _session(db, pid, sid)
+            latest_session = _session(db, pid, sid)
+            if latest_session["status"] != "live":
+                raise ValueError("对谈已结束")
             db.execute("UPDATE conversation_turns SET text=?,output='' WHERE id=? AND task_id=?", (text, tid, ctx.task_id))
         return {"saved": True}
-    except (job_queue.TaskCancelled, job_queue.LeaseLost):
+    except job_queue.TaskUnavailable:
         raise
-    except Exception:
-        raise RuntimeError("对谈回应暂未完成，原始讲述已经保存，请重试") from None
+    except Exception as cause:
+        failure = classify(cause)
+        with store.get() as db:
+            # 仅在仍持有任务租约时写诊断，取消或迟到结果不能继续保存。
+            ctx.check_cancelled(db)
+            diagnostic(db, pid, ctx.task_id, failure.code, failure.stage)
+        raise failure from None
 
 
 def archive_job(payload, ctx):
@@ -462,7 +567,11 @@ def archive_job(payload, ctx):
         ctx.check_cancelled(db)
         _session(db, pid, sid)
         db.execute("UPDATE conversation_sessions SET archive=? WHERE id=? AND archive_task=?", (json.dumps(document, ensure_ascii=False), sid, ctx.task_id))
+        if session["kind"] == "memoir":
+            for event in events:
+                memory_store.save_candidate(db, pid, event)
+            enqueue_book(db, pid)
     return {"saved": True}
 
 
-HANDLERS = {"conversation_reply": reply_job, "conversation_archive": archive_job}
+HANDLERS = {"conversation_reply": reply_job, "conversation_archive": archive_job, "conversation_book": chapters.job}
