@@ -148,6 +148,7 @@ def main(argv=None):
     parser.add_argument("--once", action="store_true", help="执行至多一个可领取任务后退出")
     parser.add_argument("--poll-seconds", type=float, default=1, help="空闲轮询间隔，默认 1 秒")
     parser.add_argument("--lease-seconds", type=float, default=60, help="处理租约时长，默认 60 秒")
+    parser.add_argument("--interview-only", action="store_true", help="Only process interview preparation tasks")
     parser.add_argument("--worker-id", default="", help="可选的处理进程标识")
     args = parser.parse_args(argv)
     if args.poll_seconds <= 0 or args.lease_seconds <= 0:
@@ -163,7 +164,11 @@ def main(argv=None):
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
+    from interview_prep import domain as interview_domain
+    interview_domain.init()
     handlers, on_cancel, on_success = _handlers()
+    if args.interview_only:
+        handlers = {key: value for key, value in handlers.items() if key.startswith("interview_")}
     while not stop_event.is_set():
         worked = run_once(handlers=handlers, on_cancel=on_cancel, on_success=on_success,
                           worker_id=args.worker_id or None,

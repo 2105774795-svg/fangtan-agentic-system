@@ -1,4 +1,4 @@
-export type Scene = 'market' | 'enterprise' | 'memoir';
+export type Scene = 'market' | 'enterprise' | 'memoir' | 'interview';
 export type Field = { key: string; label: string; options: string[]; multiple: boolean; allow_custom?: boolean; resolved_value?: string };
 export type Scenario = { name: string; description: string; noun: string; steps: string[]; fields: Field[] };
 export type Artifact = { id: string; step: number; title: string; content: string; version: number; demo: boolean; origin?: 'ai' | 'user' | 'system' | 'demo'; kind?: string; source_session?: string; stale?: boolean; versions: { version: number; content: string; at: number }[] };

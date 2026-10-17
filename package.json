@@ -15,7 +15,9 @@
     "test:frontend": "node scripts/run-frontend-tests.cjs",
     "dev:platform": "npm --prefix frontend run dev",
     "build:platform": "npm --prefix frontend run build",
-    "test:platform": "node scripts/test-platform.cjs"
+    "test:platform": "node scripts/test-platform.cjs",
+    "test:interview": "node scripts/test-interview-prep.cjs",
+    "test:interview:advanced": "node scripts/test-interview-advanced.cjs"
   },
   "devDependencies": {
     "fake-indexeddb": "6.2.5",

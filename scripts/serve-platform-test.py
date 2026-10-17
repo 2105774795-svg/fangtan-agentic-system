@@ -2,13 +2,15 @@
 import os
 import sys
 import threading
+import tempfile
 import time
 import uuid
 from pathlib import Path
 from unittest.mock import patch
 
 root = Path(__file__).resolve().parents[1]
-os.environ["FANGTAN_DATA_DIR"] = str(Path("D:/codex-deps/tmp") / ("platform-browser-" + uuid.uuid4().hex))
+_browser_data = tempfile.TemporaryDirectory(prefix="platform-browser-")
+os.environ["FANGTAN_DATA_DIR"] = _browser_data.name
 os.environ["KIMI_API_KEY"] = "browser-fixture-never-sent"
 os.environ["DASHSCOPE_API_KEY"] = ""
 os.environ["FANGTAN_AUTH_ENABLED"] = "false"

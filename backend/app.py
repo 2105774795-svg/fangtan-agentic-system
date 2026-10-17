@@ -48,6 +48,7 @@ from services.downloads import TemporaryDownloadResponse
 from services.materials import load_project_materials, location_text
 from memoir import api as memoir_api, auth as memoir_auth, store as memoir_store
 import research_platform
+from interview_prep import api as interview_api, domain as interview_domain
 
 app = FastAPI(title="访谈-体察", redirect_slashes=False)
 app.mount(
@@ -75,6 +76,8 @@ app.include_router(research_platform.router)
 import conversation_engine
 conversation_engine.init()
 app.include_router(conversation_engine.router)
+interview_domain.init()
+app.include_router(interview_api.router)
 app.mount("/platform-assets", StaticFiles(directory=Path(__file__).parent / "static" / "platform" / "platform-assets", check_dir=False), name="platform-assets")
 app.mount("/platform-media", StaticFiles(directory=Path(__file__).parent / "static" / "platform-media", check_dir=False), name="platform-media")
 config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -83,7 +86,7 @@ config.REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 @app.exception_handler(RequestValidationError)
 async def private_validation_error(request: Request, exc: RequestValidationError):
-    if request.url.path.startswith("/api/memoir/"):
+    if request.url.path.startswith(("/api/memoir/", "/api/interview-prep/")):
         # Pydantic 默认 input 字段可能回显密码或口述原话，私密域统一脱敏。
         return JSONResponse({"detail": "提交内容格式不正确，请检查必填项与长度"}, status_code=422,
                             headers={"Cache-Control": "private, no-store"})
@@ -135,7 +138,12 @@ async def employee_gate(request: Request, call_next):
             request.state.user = await employee_auth.current_user(request)
         except HTTPException as exc:
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-    return await call_next(request)
+    response = await call_next(request)
+    if path.startswith('/api/interview-prep/'):
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 
 def _user(request: Request):
@@ -146,6 +154,9 @@ def _user(request: Request):
 
 
 def _require_session(sid: str, request: Request, write=False):
+    summary = store.get_session_summary(sid)
+    if summary and summary.get("purpose") == "interview_answer":
+        raise HTTPException(404, "session not found")
     if not config.AUTH_ENABLED:
         _user(request)
         session = store.get_session_summary(sid)
@@ -1096,6 +1107,10 @@ def _process_chunk(sid: str, raw: bytes, filename: str, chunk_id="") -> int:
 
 def _handle_transcript(sid: str, seq: int, start_ms: int, end_ms: int, text: str):
     """一条转写文本的完整处理：入库 → 维度归档 → 信号 → 追问建议 → 覆盖度提醒。"""
+    summary = store.get_session_summary(sid)
+    if summary and summary.get("purpose") == "interview_answer":
+        store.add_utterance(sid, seq, start_ms, end_ms, text, "")
+        return
     dims = dimensions.classify(text)
     store.add_utterance(sid, seq, start_ms, end_ms, text, ",".join(dims))
     try:
